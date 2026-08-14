@@ -1,5 +1,6 @@
-# rendered output
+# rendered output - but docs/ holds the images the README points at
 *.png
+!docs/*.png
 minimaps/
 
 # python
