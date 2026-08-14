@@ -1,0 +1,16 @@
+# rendered output
+*.png
+minimaps/
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

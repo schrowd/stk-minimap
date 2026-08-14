@@ -61,39 +61,126 @@ except ImportError:
 # where SuperTuxKart keeps its tracks
 # --------------------------------------------------------------------------
 
+def steam_library_roots() -> list[str]:
+    """
+    Steam installs games into libraries that can live on any drive; the set of
+    them is listed in steamapps/libraryfolders.vdf.  Parsing it beats guessing
+    drive letters, and saves hardcoding an app id that may change.
+    """
+    home = os.path.expanduser("~")
+    vdfs = []
+    if os.name == "nt":
+        for env in ("PROGRAMFILES(X86)", "PROGRAMFILES", "PROGRAMW6432"):
+            base = os.environ.get(env)
+            if base:
+                vdfs.append(os.path.join(base, "Steam", "steamapps",
+                                         "libraryfolders.vdf"))
+    elif sys.platform == "darwin":
+        vdfs.append(os.path.join(home, "Library/Application Support/Steam/"
+                                       "steamapps/libraryfolders.vdf"))
+    else:
+        vdfs += [os.path.join(home, ".steam/steam/steamapps/libraryfolders.vdf"),
+                 os.path.join(home, ".local/share/Steam/steamapps/libraryfolders.vdf"),
+                 os.path.join(home, ".var/app/com.valvesoftware.Steam/.local/share/"
+                                    "Steam/steamapps/libraryfolders.vdf")]
+
+    roots: list[str] = []
+    for vdf in vdfs:
+        try:
+            with open(vdf, "r", encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+        except OSError:
+            continue
+        roots.append(os.path.dirname(os.path.dirname(vdf)))   # the default library
+        # "path"   "D:\\SteamLibrary"
+        for m in re.finditer(r'"path"\s*"([^"]+)"', text):
+            roots.append(m.group(1).replace("\\\\", "\\"))
+    return roots
+
+
 def default_track_dirs() -> list[str]:
     home = os.path.expanduser("~")
-    xdg = os.environ.get("XDG_DATA_HOME", os.path.join(home, ".local", "share"))
-    cands = [
-        # system installs (Arch's `supertuxkart` package uses the first one)
-        "/usr/share/supertuxkart/data/tracks",
-        "/usr/local/share/supertuxkart/data/tracks",
-        "/usr/share/games/supertuxkart/data/tracks",
-        "/opt/supertuxkart/data/tracks",
-        # addons downloaded in-game
-        os.path.join(xdg, "supertuxkart", "addons", "tracks"),
-        os.path.join(home, ".supertuxkart", "addons", "tracks"),
-        # flatpak
-        os.path.join(home, ".var/app/net.supertuxkart.SuperTuxKart/data/"
-                           "supertuxkart/addons/tracks"),
-        os.path.join(home, ".var/app/net.supertuxkart.SuperTuxKart/.local/share/"
-                           "supertuxkart/addons/tracks"),
-        "/var/lib/flatpak/app/net.supertuxkart.SuperTuxKart/current/active/"
-        "files/share/supertuxkart/data/tracks",
-        # snap
-        os.path.join(home, "snap/supertuxkart/current/.local/share/"
-                           "supertuxkart/addons/tracks"),
-    ]
-    # git/build checkouts and versioned prefixes
-    for pat in ("/usr/share/supertuxkart*/data/tracks",
-                "/usr/share/games/supertuxkart*/data/tracks",
-                os.path.join(home, "*/stk-assets/tracks"),
-                os.path.join(home, "*/supertuxkart*/data/tracks")):
+    cands: list[str] = []
+    pats: list[str] = []
+
+    # an STK folder sitting next to this script, or next to the cwd - covers the
+    # Windows portable zip, where people drop the script into the game folder
+    here = os.path.dirname(os.path.abspath(__file__))
+    for base in (here, os.getcwd()):
+        cands += [os.path.join(base, "data", "tracks"),
+                  os.path.join(base, "tracks")]
+        pats.append(os.path.join(base, "SuperTuxKart*", "data", "tracks"))
+        pats.append(os.path.join(os.path.dirname(base), "data", "tracks"))
+
+    if os.name == "nt":
+        # installer default is C:\Program Files\SuperTuxKart <version>\
+        for env in ("PROGRAMFILES", "PROGRAMFILES(X86)", "PROGRAMW6432"):
+            base = os.environ.get(env)
+            if base:
+                pats.append(os.path.join(base, "SuperTuxKart*", "data", "tracks"))
+        # in-game addons live under %APPDATA%\supertuxkart\
+        for env in ("APPDATA", "LOCALAPPDATA"):
+            base = os.environ.get(env)
+            if base:
+                cands.append(os.path.join(base, "supertuxkart", "addons", "tracks"))
+                pats.append(os.path.join(base, "supertuxkart*", "addons", "tracks"))
+        # portable zips usually get extracted somewhere obvious
+        for folder in ("Desktop", "Downloads", "Documents", "Games"):
+            pats.append(os.path.join(home, folder, "SuperTuxKart*", "data", "tracks"))
+        for drive in ("C:\\", "D:\\"):
+            pats.append(os.path.join(drive, "SuperTuxKart*", "data", "tracks"))
+            pats.append(os.path.join(drive, "Games", "SuperTuxKart*", "data", "tracks"))
+
+    elif sys.platform == "darwin":
+        pats += ["/Applications/SuperTuxKart*.app/Contents/Resources/data/tracks",
+                 os.path.join(home, "Applications/SuperTuxKart*.app/Contents/"
+                                    "Resources/data/tracks")]
+        cands += [os.path.join(home, "Library/Application Support/SuperTuxKart/"
+                                     "addons/tracks"),
+                  "/Applications/SuperTuxKart.app/Contents/Resources/data/tracks"]
+
+    else:
+        xdg = os.environ.get("XDG_DATA_HOME", os.path.join(home, ".local", "share"))
+        cands += [
+            # system installs (Arch's `supertuxkart` package uses the first one)
+            "/usr/share/supertuxkart/data/tracks",
+            "/usr/local/share/supertuxkart/data/tracks",
+            "/usr/share/games/supertuxkart/data/tracks",
+            "/opt/supertuxkart/data/tracks",
+            # addons downloaded in-game
+            os.path.join(xdg, "supertuxkart", "addons", "tracks"),
+            os.path.join(home, ".supertuxkart", "addons", "tracks"),
+            # flatpak
+            os.path.join(home, ".var/app/net.supertuxkart.SuperTuxKart/data/"
+                               "supertuxkart/addons/tracks"),
+            os.path.join(home, ".var/app/net.supertuxkart.SuperTuxKart/.local/share/"
+                               "supertuxkart/addons/tracks"),
+            "/var/lib/flatpak/app/net.supertuxkart.SuperTuxKart/current/active/"
+            "files/share/supertuxkart/data/tracks",
+            # snap
+            os.path.join(home, "snap/supertuxkart/current/.local/share/"
+                               "supertuxkart/addons/tracks"),
+        ]
+        # git/build checkouts and versioned prefixes
+        pats += ["/usr/share/supertuxkart*/data/tracks",
+                 "/usr/share/games/supertuxkart*/data/tracks",
+                 os.path.join(home, "*/stk-assets/tracks"),
+                 os.path.join(home, "*/supertuxkart*/data/tracks")]
+
+    # Steam, on every platform
+    for root in steam_library_roots():
+        pats.append(os.path.join(root, "steamapps", "common", "SuperTuxKart*",
+                                 "data", "tracks"))
+        pats.append(os.path.join(root, "steamapps", "common", "SuperTuxKart*",
+                                 "SuperTuxKart.app", "Contents", "Resources",
+                                 "data", "tracks"))
+
+    for pat in pats:
         cands.extend(glob.glob(pat))
 
     env = os.environ.get("STK_TRACK_DIR") or os.environ.get("SUPERTUXKART_DATADIR")
     if env:
-        for p in env.split(os.pathsep):
+        for p in reversed(env.split(os.pathsep)):
             cands.insert(0, p)
             cands.insert(1, os.path.join(p, "tracks"))
             cands.insert(2, os.path.join(p, "data", "tracks"))
@@ -101,8 +188,9 @@ def default_track_dirs() -> list[str]:
     out, seen = [], set()
     for c in cands:
         c = os.path.normpath(c)
-        if c not in seen and os.path.isdir(c):
-            seen.add(c)
+        key = os.path.normcase(c)
+        if key not in seen and os.path.isdir(c):
+            seen.add(key)
             out.append(c)
     return out
 
@@ -490,6 +578,43 @@ def _downscale(img: Image.Image, size: tuple[int, int],
     return Image.fromarray(np.clip(out + 0.5, 0, 255).astype(np.uint8), "RGBA")
 
 
+def find_title_font(px: int):
+    """
+    Pillow ships only a tiny bitmap font, so --title needs a real TTF off the
+    system.  No single path is portable - even Arch has no DejaVu unless the
+    package is pulled in - so try a list and degrade gracefully.
+    """
+    names: list[str] = []
+    if os.name == "nt":
+        root = os.path.join(os.environ.get("WINDIR", "C:\\Windows"), "Fonts")
+        names += [os.path.join(root, f) for f in
+                  ("segoeuib.ttf", "arialbd.ttf", "tahomabd.ttf",
+                   "verdanab.ttf", "calibrib.ttf")]
+    elif sys.platform == "darwin":
+        names += ["/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+                  "/Library/Fonts/Arial Bold.ttf",
+                  "/System/Library/Fonts/Helvetica.ttc"]
+    else:
+        for d in ("/usr/share/fonts", "/usr/local/share/fonts",
+                  os.path.expanduser("~/.local/share/fonts"),
+                  os.path.expanduser("~/.fonts")):
+            if not os.path.isdir(d):
+                continue
+            for stem in ("DejaVuSans-Bold", "LiberationSans-Bold", "NotoSans-Bold",
+                         "FreeSansBold", "Ubuntu-B", "DejaVuSans"):
+                names += sorted(glob.glob(os.path.join(d, "**", stem + ".tt[fc]"),
+                                          recursive=True))
+    for n in names:
+        try:
+            return ImageFont.truetype(n, px)
+        except OSError:
+            continue
+    try:
+        return ImageFont.load_default(px)      # Pillow >= 10.1 scales its builtin
+    except TypeError:
+        return ImageFont.load_default()
+
+
 def render(g: Graph, fr: Framing, style: str, ss: int, show_invisible: bool,
            invert_x_z: bool, outline_px: float, title: str | None,
            background: str | None, seal: bool = True) -> Image.Image:
@@ -545,11 +670,7 @@ def render(g: Graph, fr: Framing, style: str, ss: int, show_invisible: bool,
 
     if title:
         d = ImageDraw.Draw(out)
-        try:
-            font = ImageFont.truetype(
-                "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf", max(11, fr.height // 26))
-        except OSError:
-            font = ImageFont.load_default()
+        font = find_title_font(max(11, fr.height // 26))
         pad = max(8, fr.height // 40)
         col = pal["outline"] or (255, 255, 255, 200)
         d.text((pad + 1, fr.height - pad + 1), title, font=font,
