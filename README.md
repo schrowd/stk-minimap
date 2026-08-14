@@ -54,6 +54,20 @@ chmod +x stk_minimap.py
 ./stk_minimap.py --gui
 ```
 
+To get a clickable launcher instead of typing that every time:
+
+```bash
+./stk_minimap.py --install-desktop
+```
+
+**STK Minimap** then appears in your applications list, searchable and
+pinnable, and opens the window with no terminal involved.
+
+This is the only way to launch it by clicking on modern GNOME: Files removed
+the ability to run executable text files, so double-clicking a `.py` opens it
+in a text editor and there's no setting to change that. Undo it by deleting
+`~/.local/share/applications/stk-minimap.desktop`.
+
 ### macOS
 
 ```bash
@@ -124,6 +138,8 @@ which have no driveline).
 | `--data-dir` | extra directory to search, repeatable |
 | `--no-seal` | don't weld hairline gaps between quads |
 | `--gui` | open the window |
+| `--install-desktop` | Linux: add a launcher to the applications menu |
+| `--version` | print the version |
 
 ---
 

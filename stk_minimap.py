@@ -33,7 +33,7 @@ Examples
 
 from __future__ import annotations
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 
 import argparse
 import glob
@@ -1091,6 +1091,62 @@ def run_gui(extra_dirs: list[str]) -> int:
     return 0
 
 
+def install_desktop_entry(quiet: bool = False) -> int:
+    """
+    Put a launcher in the application menu.
+
+    GNOME Files dropped the ability to run executable text files - the
+    executable-text-activation preference no longer exists - so double-clicking
+    a .py there just opens an editor.  A .desktop entry is the supported way in,
+    and it also gets the app into the grid, search and the dash.
+    """
+    if os.name == "nt" or sys.platform == "darwin":
+        print("--install-desktop is for Linux/BSD desktops.  On Windows, "
+              "double-click 'STK Minimap.pyw'.", file=sys.stderr)
+        return 1
+
+    def dq(s: str) -> str:
+        # .desktop Exec quoting: double quotes, backslash-escaped internals
+        if any(c in s for c in ' \t"\\$`'):
+            return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+        return s
+
+    data = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
+    apps = os.path.join(data, "applications")
+    os.makedirs(apps, exist_ok=True)
+    path = os.path.join(apps, "stk-minimap.desktop")
+
+    entry = (
+        "[Desktop Entry]\n"
+        "Type=Application\n"
+        f"Name=STK Minimap\n"
+        "GenericName=Minimap renderer\n"
+        "Comment=Render SuperTuxKart track minimaps to PNG\n"
+        f"Exec={dq(sys.executable)} {dq(os.path.abspath(__file__))} --gui\n"
+        "Icon=applications-graphics\n"
+        "Terminal=false\n"
+        # one main category only, or the entry can show up twice in the menu
+        "Categories=Graphics;2DGraphics;RasterGraphics;\n"
+        "Keywords=supertuxkart;stk;minimap;track;speedrun;\n"
+        f"X-Version={__version__}\n"
+    )
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(entry)
+    os.chmod(path, 0o755)
+
+    # some desktops need the cache poked before the entry shows up
+    if shutil.which("update-desktop-database"):
+        os.system(f"update-desktop-database {apps!r} 2>/dev/null")
+
+    if not quiet:
+        print(f"Installed {path}\n"
+              f"  'STK Minimap' should now appear in your applications list - "
+              f"you may need to log out\n  and back in if it doesn't show up "
+              f"straight away.\n"
+              f"  Remove it again with:  rm {path!r}")
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         description="Render a SuperTuxKart minimap to PNG the way the game does "
@@ -1106,6 +1162,9 @@ def main(argv=None) -> int:
     ap.add_argument("--gui", action="store_true",
                     help="open the point-and-click window (default when the script "
                          "is started with no arguments on Windows)")
+    ap.add_argument("--install-desktop", action="store_true",
+                    help="Linux: add 'STK Minimap' to the application menu, so you "
+                         "can launch the window without a terminal")
     ap.add_argument("--data-dir", action="append", default=[],
                     help="extra directory to search for tracks (repeatable)")
 
@@ -1145,6 +1204,9 @@ def main(argv=None) -> int:
 
     args = ap.parse_args(argv)
     tmpdirs: list[str] = []
+
+    if args.install_desktop:
+        return install_desktop_entry(args.quiet)
 
     # double-clicking the script in Explorer passes no arguments; a usage error
     # in a console that closes instantly is useless, so open the window instead
