@@ -752,6 +752,343 @@ def build(track_dir: str, args) -> tuple[Image.Image, Framing, Graph, TrackInfo]
     return img, fr, g, ti
 
 
+# --------------------------------------------------------------------------
+# GUI  (--gui, or just double-click the script on Windows)
+# --------------------------------------------------------------------------
+
+def _gui_args(**over):
+    """build() takes the argparse namespace, so the GUI fakes one."""
+    a = argparse.Namespace(reverse=False, full_polys=False, size=512, fit=False,
+                           margin=0.02, style="exact", supersample=4,
+                           show_invisible=False, invert_x_z=False, outline=1.0,
+                           title=False, background=None, no_seal=False)
+    for k, v in over.items():
+        setattr(a, k, v)
+    return a
+
+
+def _checkerboard(size, cell=8, a=(74, 78, 84), b=(58, 61, 66)):
+    """'exact' minimaps are transparent; without this the preview looks empty."""
+    img = Image.new("RGB", size, a)
+    d = ImageDraw.Draw(img)
+    for y in range(0, size[1], cell):
+        for x in range(0, size[0], cell):
+            if (x // cell + y // cell) % 2:
+                d.rectangle([x, y, x + cell - 1, y + cell - 1], fill=b)
+    return img
+
+
+def run_gui(extra_dirs: list[str]) -> int:
+    try:
+        import tkinter as tk
+        from tkinter import ttk, filedialog, messagebox
+    except ImportError:
+        sys.exit("The GUI needs tkinter, which your Python is missing.\n"
+                 "  Arch/Manjaro : sudo pacman -S tk\n"
+                 "  Debian/Ubuntu: sudo apt install python3-tk\n"
+                 "  Fedora       : sudo dnf install python3-tkinter\n"
+                 "  macOS/Windows: reinstall Python from python.org (it bundles it)\n"
+                 "The command line still works without it - see --help.")
+    try:
+        from PIL import ImageTk
+    except ImportError:
+        sys.exit("The GUI needs Pillow's ImageTk module (package python3-pil.imagetk "
+                 "on Debian/Ubuntu).")
+    import queue
+    import threading
+
+    PREVIEW = 420
+
+    class App:
+        def __init__(self, root):
+            self.root = root
+            self.q: queue.Queue = queue.Queue()
+            self.tmpdirs: list[str] = []
+            self.extra_dirs = list(extra_dirs)
+            self.tracks = find_tracks(self.extra_dirs)
+            self.current = None          # (Image, Framing, Graph, TrackInfo)
+            self.busy = False
+            root.title("STK Minimap")
+            root.minsize(880, 560)
+
+            outer = ttk.Frame(root, padding=8)
+            outer.pack(fill="both", expand=True)
+
+            # ---- left: track list -------------------------------------
+            left = ttk.Frame(outer)
+            left.pack(side="left", fill="both", expand=False)
+            ttk.Label(left, text="Track").pack(anchor="w")
+            self.filter = tk.StringVar()
+            ent = ttk.Entry(left, textvariable=self.filter, width=30)
+            ent.pack(fill="x")
+            ent.insert(0, "")
+            self.filter.trace_add("write", lambda *_: self.refill())
+
+            box = ttk.Frame(left)
+            box.pack(fill="both", expand=True, pady=(4, 4))
+            self.listbox = tk.Listbox(box, width=30, height=22,
+                                      exportselection=False, activestyle="none")
+            sb = ttk.Scrollbar(box, orient="vertical", command=self.listbox.yview)
+            self.listbox.configure(yscrollcommand=sb.set)
+            self.listbox.pack(side="left", fill="both", expand=True)
+            sb.pack(side="right", fill="y")
+            self.listbox.bind("<<ListboxSelect>>", lambda _e: self.preview())
+
+            btns = ttk.Frame(left)
+            btns.pack(fill="x")
+            ttk.Button(btns, text="Add folder…",
+                       command=self.add_folder).pack(side="left", expand=True, fill="x")
+            ttk.Button(btns, text="Open .zip…",
+                       command=self.open_zip).pack(side="left", expand=True, fill="x")
+
+            # ---- right: preview + options -----------------------------
+            right = ttk.Frame(outer, padding=(10, 0, 0, 0))
+            right.pack(side="left", fill="both", expand=True)
+
+            self.canvas = tk.Label(right, background="#2b2e33", anchor="center")
+            self.canvas.pack(fill="both", expand=True)
+
+            self.info = ttk.Label(right, text="Pick a track.", anchor="w",
+                                  justify="left")
+            self.info.pack(fill="x", pady=(6, 4))
+
+            opt = ttk.LabelFrame(right, text="Options", padding=6)
+            opt.pack(fill="x")
+
+            self.style = tk.StringVar(value="clean")
+            self.size = tk.IntVar(value=512)
+            self.ss = tk.IntVar(value=4)
+            self.v_title = tk.BooleanVar(value=False)
+            self.v_invis = tk.BooleanVar(value=False)
+            self.v_rev = tk.BooleanVar(value=False)
+            self.v_fit = tk.BooleanVar(value=False)
+            self.v_full = tk.BooleanVar(value=False)
+
+            r1 = ttk.Frame(opt); r1.pack(fill="x", pady=2)
+            ttk.Label(r1, text="Style").pack(side="left")
+            cb = ttk.Combobox(r1, textvariable=self.style, width=10, state="readonly",
+                              values=sorted(STYLES))
+            cb.pack(side="left", padx=(4, 12))
+            cb.bind("<<ComboboxSelected>>", lambda _e: self.preview())
+            ttk.Label(r1, text="Size").pack(side="left")
+            sz = ttk.Combobox(r1, textvariable=self.size, width=7, state="readonly",
+                              values=(256, 512, 1024, 2048))
+            sz.pack(side="left", padx=(4, 12))
+            ttk.Label(r1, text="Quality").pack(side="left")
+            ttk.Spinbox(r1, from_=1, to=8, width=4,
+                        textvariable=self.ss).pack(side="left", padx=4)
+
+            r2 = ttk.Frame(opt); r2.pack(fill="x", pady=2)
+            for text, var in (("Track name", self.v_title),
+                              ("Hidden quads", self.v_invis),
+                              ("Reverse", self.v_rev),
+                              ("Crop to track", self.v_fit),
+                              ("Full n-gons", self.v_full)):
+                ttk.Checkbutton(r2, text=text, variable=var,
+                                command=self.preview).pack(side="left", padx=(0, 10))
+
+            r3 = ttk.Frame(right); r3.pack(fill="x", pady=(8, 0))
+            self.save_btn = ttk.Button(r3, text="Save PNG…", command=self.save)
+            self.save_btn.pack(side="left")
+            self.all_btn = ttk.Button(r3, text="Save every track…",
+                                      command=self.save_all)
+            self.all_btn.pack(side="left", padx=6)
+            self.status = ttk.Label(r3, text="", anchor="e")
+            self.status.pack(side="right", fill="x", expand=True)
+
+            self.refill()
+            self._poll()
+            if not self.tracks:
+                self.info.configure(
+                    text="No SuperTuxKart tracks found.\n"
+                         "Use “Add folder…” to point at your STK data\\tracks "
+                         "folder, or “Open .zip…” for an addon.")
+            root.protocol("WM_DELETE_WINDOW", self.quit)
+
+        # -- helpers ------------------------------------------------------
+        def quit(self):
+            for d in self.tmpdirs:
+                shutil.rmtree(d, ignore_errors=True)
+            self.root.destroy()
+
+        def refill(self):
+            f = self.filter.get().strip().lower()
+            self.shown = [k for k in sorted(self.tracks) if f in k.lower()]
+            self.listbox.delete(0, "end")
+            for k in self.shown:
+                self.listbox.insert("end", k)
+
+        def selected(self):
+            sel = self.listbox.curselection()
+            return self.shown[sel[0]] if sel else None
+
+        def args(self, size=None, ss=None):
+            return _gui_args(style=self.style.get(),
+                             size=size or self.size.get(),
+                             supersample=ss or self.ss.get(),
+                             title=self.v_title.get(),
+                             show_invisible=self.v_invis.get(),
+                             reverse=self.v_rev.get(),
+                             fit=self.v_fit.get(),
+                             full_polys=self.v_full.get())
+
+        def set_busy(self, on, msg=""):
+            self.busy = on
+            state = "disabled" if on else "normal"
+            self.save_btn.configure(state=state)
+            self.all_btn.configure(state=state)
+            self.status.configure(text=msg)
+            self.root.update_idletasks()
+
+        # -- actions ------------------------------------------------------
+        def preview(self):
+            ident = self.selected()
+            if not ident or self.busy:
+                return
+            # cheap settings: the preview only has to look right, not be final
+            try:
+                img, fr, g, ti = build(self.tracks[ident],
+                                       self.args(size=PREVIEW, ss=2))
+            except SystemExit as exc:
+                self.info.configure(text=f"{ident}: {exc}")
+                self.canvas.configure(image="")
+                return
+            self.current = (ident, ti, g, fr)
+            shown = _checkerboard(img.size)
+            shown.paste(img, mask=img.split()[3])
+            self.photo = ImageTk.PhotoImage(shown)
+            self.canvas.configure(image=self.photo)
+            vis = sum(1 for n in g.nodes if not n.invisible)
+            kind = "arena / navmesh" if g.kind == "arena" else "driveline"
+            self.info.configure(
+                text=f"{ti.name}  [{ti.ident}]   {kind}   "
+                     f"{len(g.nodes)} quads ({vis} visible)\n"
+                     f"px = (x − {fr.origin_x:.2f}) × {fr.scaling:.4f}     "
+                     f"py = {fr.height} − (z − {fr.origin_z:.2f}) "
+                     f"× {fr.scaling:.4f}")
+
+        def _work(self, fn, done):
+            """
+            Tk may only be touched from the thread running the main loop, so the
+            worker never calls a widget - it posts to a queue that the UI drains
+            on a timer.  (Calling root.after() from the worker looks like it
+            works and then raises "main thread is not in main loop".)
+            """
+            def run():
+                try:
+                    res = fn()
+                except Exception as exc:                      # noqa: BLE001
+                    res = exc
+                self.q.put(("done", (done, res)))
+            threading.Thread(target=run, daemon=True).start()
+
+        def _poll(self):
+            try:
+                while True:
+                    kind, payload = self.q.get_nowait()
+                    if kind == "status":
+                        self.status.configure(text=payload)
+                    else:
+                        fn, res = payload
+                        fn(res)
+            except queue.Empty:
+                pass
+            self.root.after(80, self._poll)
+
+        def save(self):
+            ident = self.selected()
+            if not ident or self.busy:
+                return
+            path = filedialog.asksaveasfilename(
+                defaultextension=".png", filetypes=[("PNG image", "*.png")],
+                initialfile=f"{ident}_minimap.png")
+            if not path:
+                return
+            self.set_busy(True, "rendering…")
+
+            def job():
+                img, _fr, _g, _ti = build(self.tracks[ident], self.args())
+                img.save(path)
+                return path
+
+            def done(res):
+                self.set_busy(False, "")
+                if isinstance(res, Exception):
+                    messagebox.showerror("Save failed", str(res))
+                else:
+                    self.status.configure(text=f"saved {os.path.basename(res)}")
+
+            self._work(job, done)
+
+        def save_all(self):
+            if self.busy or not self.tracks:
+                return
+            folder = filedialog.askdirectory(title="Save every minimap into…")
+            if not folder:
+                return
+            self.set_busy(True, "rendering…")
+            args = self.args()
+            items = sorted(self.tracks.items())
+
+            def job():
+                ok = 0
+                for i, (ident, path) in enumerate(items, 1):
+                    self.q.put(("status", f"{i}/{len(items)}  {ident}"))
+                    try:
+                        img, _fr, _g, _ti = build(path, args)
+                    except SystemExit:
+                        continue                     # cutscenes have no graph
+                    img.save(os.path.join(folder, f"{ident}_minimap.png"))
+                    ok += 1
+                return ok
+
+            def done(res):
+                self.set_busy(False, "")
+                if isinstance(res, Exception):
+                    messagebox.showerror("Save failed", str(res))
+                else:
+                    self.status.configure(text=f"wrote {res} minimaps")
+
+            self._work(job, done)
+
+        def add_folder(self):
+            d = filedialog.askdirectory(title="Folder holding STK tracks")
+            if not d:
+                return
+            self.extra_dirs.insert(0, d)
+            self.tracks = find_tracks(self.extra_dirs)
+            self.refill()
+            self.status.configure(text=f"{len(self.tracks)} tracks")
+
+        def open_zip(self):
+            f = filedialog.askopenfilename(title="Addon track archive",
+                                           filetypes=[("Track archive", "*.zip")])
+            if not f:
+                return
+            try:
+                d = resolve_track(f, self.extra_dirs, self.tmpdirs)
+            except SystemExit as exc:
+                messagebox.showerror("Could not open", str(exc))
+                return
+            ti = read_track_info(d)
+            self.tracks[ti.ident] = d
+            self.refill()
+            if ti.ident in self.shown:
+                self.listbox.selection_clear(0, "end")
+                self.listbox.selection_set(self.shown.index(ti.ident))
+                self.preview()
+
+    root = tk.Tk()
+    try:
+        ttk.Style().theme_use("clam")
+    except tk.TclError:
+        pass
+    app = App(root)                      # keep a reference: the timer callbacks
+    root.mainloop()                      # are the only other thing holding it
+    del app
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         description="Render a SuperTuxKart minimap to PNG the way the game does "
@@ -764,6 +1101,9 @@ def main(argv=None) -> int:
     ap.add_argument("-O", "--output-dir", default=".", help="output directory for --all")
     ap.add_argument("--all", action="store_true", help="render every track found")
     ap.add_argument("--list", action="store_true", help="list the tracks found and exit")
+    ap.add_argument("--gui", action="store_true",
+                    help="open the point-and-click window (default when the script "
+                         "is started with no arguments on Windows)")
     ap.add_argument("--data-dir", action="append", default=[],
                     help="extra directory to search for tracks (repeatable)")
 
@@ -801,6 +1141,11 @@ def main(argv=None) -> int:
 
     args = ap.parse_args(argv)
     tmpdirs: list[str] = []
+
+    # double-clicking the script in Explorer passes no arguments; a usage error
+    # in a console that closes instantly is useless, so open the window instead
+    if args.gui or (os.name == "nt" and not sys.argv[1:]):
+        return run_gui(args.data_dir)
 
     try:
         if args.list:
