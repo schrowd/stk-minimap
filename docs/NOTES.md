@@ -1,8 +1,12 @@
-# Context brief: `stk_minimap.py`
+# Implementation notes
 
-I'm attaching a Python script called `stk_minimap.py`. Read it first, then read this
-brief — it contains the domain research behind the script, which you won't be able to
-reconstruct from the code alone. My actual task is at the bottom.
+Background research behind `stk_minimap.py`, kept because most of it can't be
+reconstructed from the code alone. Worth reading before changing anything in the
+loading or framing path: several of the behaviours below are counterintuitive, and
+getting one wrong silently shifts or distorts every image the tool produces.
+
+Everything here was pulled from `stk-code` master — that, not this document, is the
+source of truth.
 
 ## What the script does
 
@@ -93,31 +97,32 @@ Facts that the script depends on — all verified against `stk-code` master:
 - `height-testing` elements are parsed and ignored (physics only, no visual effect).
 - Only the `default` `<mode>` from `track.xml` is honoured for `quads=` / `graph=`.
 
-## Testing situation — read this before you trust anything
+## Testing
 
-SuperTuxKart was **not installed** in the environment where this was written, so the
-script has never run against a real STK install. It was validated against:
+Validated against a stock **SuperTuxKart 1.5** install on Arch Linux:
 
-1. A `quads.xml` reassembled from the real `olivermath` track data (coordinates pulled
-   from the `stk-assets` mirror at `github.com/minghuadev/stk-assets`) — 44 quads, real
-   geometry, renders recognisably.
-2. A synthetic `navmesh.xml` exercising 3-, 4- and 6-vertex faces.
-3. A programmatic check that every visible quad's centroid lands on a painted pixel and
-   that `bb_min` maps to the bottom-left corner.
-4. (added by the end user) A live 1.5 copy of STK
+- `--list` finds 44 tracks; 38 have a graph and render. The other six are cutscenes
+  and grand-prix result screens with no driveline, and are skipped by `--all`.
+- Race tracks (`hacienda`, `cornfield_crossing`), arenas (`battleisland`) and soccer
+  fields (`icy_soccer_field`) all render recognisably.
+- The `exact` palette check: interior pixels are exactly `(255,255,255,127)`,
+  background `(255,255,255,0)`, lap line `(255,0,0,128)` on race tracks only, with
+  roughly 1% antialiased edge pixels in between.
+- Every visible quad's centroid lands on a painted pixel, and `bb_min` maps to the
+  bottom-left corner exactly — `(0.0, 512.0)` at the default size.
 
-**If STK is installed on this machine, running `./stk_minimap.py --list` and rendering a
-few real tracks is the highest-value first step.** Environment is Arch Linux; deps are
-`python-pillow` and (optional) `python-numpy`.
+Earlier validation, from before an STK install was available, used a `quads.xml`
+reassembled from real `olivermath` data and a synthetic `navmesh.xml` exercising 3-,
+4- and 6-vertex faces. The synthetic navmesh is still the only coverage for the
+n-gon truncation path, since no stock 1.5 track exercises every case.
 
-When in doubt about STK behaviour, the source of truth is `stk-code` on GitHub:
-`src/tracks/graph.cpp`, `drive_graph.cpp`, `arena_graph.cpp`, `quad.cpp`, and
-`Track::loadMinimap` in `track.cpp`. Don't guess — the details above were all pulled
-from those files, and a few of them are counterintuitive.
+The GUI was driven end to end under a real Tk main loop: track list, preview,
+`exact`-style preview, save, save-all, and the filter box.
 
----
+Deps are `python-pillow` and, optionally, `python-numpy`; the GUI additionally needs
+`tk` and `python-pillow`'s ImageTk.
 
-## My task
+## Source of truth
 
-Make this thing worthy of publication on official SuperTuxKart channels, including the speedrun.com forums/resources and the Tux Speedrunning Discord.
- This includes Windows functionality and a README file on how to use it. This should be tracked via Git as I will publish this on GitHub once complete.
+`stk-code` on GitHub: `src/tracks/graph.cpp`, `drive_graph.cpp`, `arena_graph.cpp`,
+`quad.cpp`, and `Track::loadMinimap` in `track.cpp`.

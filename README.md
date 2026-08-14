@@ -236,6 +236,9 @@ Rendering is supersampled and resolved with a premultiplied box filter, which
 keeps `exact` landing on alpha 127 exactly. (Lanczos rings past 127 and breaks
 that guarantee, so it's only used as a fallback when NumPy isn't installed.)
 
+If you want to change any of that, read [docs/NOTES.md](docs/NOTES.md) first — it
+records the research behind these decisions and the traps in reproducing them.
+
 ### Known gaps
 
 - Soccer goal-line node colouring (`ArenaGraph::differentNodeColor`) isn't
