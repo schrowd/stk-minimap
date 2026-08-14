@@ -40,7 +40,8 @@ makes the downscaling alpha-correct and a bit sharper).
 3. Download `stk_minimap.py` (and `STK Minimap.pyw`, optional) from this repo.
 4. **Double-click `stk_minimap.py`** — the window opens and finds your tracks by
    itself. Double-click `STK Minimap.pyw` instead if you'd rather not have a
-   console window behind it.
+   console window behind it. (That `.pyw` trick is Windows-only — the extension
+   has no effect on Linux or macOS.)
 
 ### Linux
 
@@ -68,6 +69,10 @@ it.
 ## The window
 
 `--gui`, or just double-click the script on Windows.
+
+<p align="center">
+  <img src="docs/gui.png" width="720" alt="The STK Minimap window">
+</p>
 
 Pick a track from the list on the left and the preview updates immediately.
 Set the style, output size and quality, tick what you want drawn, then
