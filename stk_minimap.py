@@ -33,6 +33,8 @@ Examples
 
 from __future__ import annotations
 
+__version__ = "1.0.0"
+
 import argparse
 import glob
 import math
@@ -808,7 +810,7 @@ def run_gui(extra_dirs: list[str]) -> int:
             self.tracks = find_tracks(self.extra_dirs)
             self.current = None          # (Image, Framing, Graph, TrackInfo)
             self.busy = False
-            root.title("STK Minimap")
+            root.title(f"STK Minimap {__version__}")
             root.minsize(880, 560)
 
             outer = ttk.Frame(root, padding=8)
@@ -1138,6 +1140,8 @@ def main(argv=None) -> int:
                     help="navmesh only: draw faces with >4 vertices in full "
                          "(STK truncates them to the first 4)")
     ap.add_argument("-q", "--quiet", action="store_true")
+    ap.add_argument("--version", action="version",
+                    version=f"stk_minimap {__version__}")
 
     args = ap.parse_args(argv)
     tmpdirs: list[str] = []
