@@ -136,6 +136,68 @@ At an angle of zero the framing is bit-identical to the unrotated path — the s
 `mapPoint2MiniMap` compatibility, as `--fit` does, and for the same reason: the
 mapping is no longer a plain affine transform of the world point.
 
+## When a replay leaves the driveline graph's bounding box
+
+STK builds the minimap from the driveline graph alone (`Graph::createQuad`'s
+bounding box), which is not necessarily everywhere a kart can physically go.
+Confirmed against real data before writing anything: the shipped Cocoa Temple
+world record dips 14.8 world units past the graph's minimum Z; a minigolf
+egg-hunt challenge goes 24–27 units past on both axes. At the default size
+that's tens of pixels of a genuine shortcut - not a rare artefact - silently
+missing, because PIL's `ImageDraw` clips a call that goes off-canvas rather
+than raising, so nothing *looks* broken until you go looking for the missing
+piece. A sweep of every local replay against its own track found 9 of the 21
+tracks with at least one replay affected, not just Cocoa Temple.
+
+`expand_framing_for_replay` grows the canvas to fit whenever this happens.
+The one property that matters, and the one this cannot violate given the
+orientation-lock guarantee above: **scaling, angle and pivot never change,
+canvas size and origin do** - which makes it a pure translation, not a
+rescale. Concretely: `new_origin_x = origin_x - left`,
+`new_width = width + (left + right) * scaling`, and the reverse on Z; a point
+that was already on the map moves by exactly the same pixel vector as every
+other point, so distances, angles and proportions between any two points on
+the map are preserved to floating-point precision (verified: ~1e-13 across
+sampled point pairs). The base minimap ends up positioned somewhere other
+than pixel (0, 0) of the output when this fires, with the shortcut visible in
+the surrounding margin - the game-accurate part of the image is untouched,
+just no longer flush against the corner. A margin of `3%` of the frame is
+added on all four sides whenever *any* side needs to grow, for breathing
+room, which is why even a side with no excursion can still shift by a
+constant amount - correct and expected, not a bug (see the verification note
+below).
+
+Wired in at the one place both entry points already funnel through:
+`build()` takes an optional `extra_karts` list purely for this expansion,
+independent of whether it's also drawing an overlay through `render()`'s
+`replay=` parameter. The CLI's `--replay`/`--compare` path already has karts
+in hand and passes them along; the GUI's live view draws its replay overlay
+straight onto the Tk canvas rather than through that PIL path; it passes the
+loaded replay's karts (both, if comparing) into the same `extra_karts`
+parameter purely to get the framing sized right, without duplicating any of
+`build()`'s graph or checkline loading. This is also why the fix is entirely
+free for the overwhelmingly common case - an ordinary track/replay pair
+returns the identical `Framing` object, verified by identity (`is`), and a
+plain map render (no `--replay` at all) never touches this path.
+
+Verification trap worth recording: my first check compared each point's
+*absolute* pixel position between the old and new framing and found points
+apparently drifting up to 30px, which looked like a bug. It wasn't - that
+was `abs(dx) + abs(dy)` summed across both axes, and both axes legitimately
+shift once padding is added on all four sides. The property that actually
+needs checking is *relative* geometry - the distance between any two points
+in pixel space - which came back exact. Don't test "did this pixel move",
+test "did the picture change shape".
+
+Rotation composes correctly without special-casing: because `make_framing`'s
+rotated case already fits the whole graph tightly *for that specific angle*,
+how much slack is left over on any given side varies with the angle - at
+rotate=0 or 60 Cocoa Temple's excursion needs expansion, at rotate=30 the
+already-computed rotated frame happens to have enough natural margin on the
+relevant side and no expansion fires at all. Confirmed by comparing the three
+angles directly rather than assuming; not a bug; the same excursion in world
+space simply lands inside a differently-shaped box depending on the angle.
+
 ## Replay playback
 
 Recorded frames are irregular and sparse: about 15 per second, with gaps ranging
@@ -146,10 +208,40 @@ the interpolated head rather than the last recorded point, or it visibly lags th
 marker. Speed in the readout is interpolated too; the categorical fields (skid
 level, nitro, items) are not, since there is nothing meaningful between two states.
 
+The marker is an arrow along the kart's heading, recovered from the recorded
+quaternion in columns 5–8 by rotating local `+Z` into world space:
+
+```
+heading = atan2( 2(qx·qz + qy·qw),  1 − 2(qx² + qy²) )
+```
+
+Two checks established that this is the right reading rather than a plausible
+one. Against the direction of travel it sits at a median 8.3°, where the mirrored
+interpretation is 80° out — so the axis and handedness are right. And the residual
+is not error but **slip angle**: broken down by skid charge it is 0.3° when not
+skidding, 16.5° skidding uncharged, 21.4° at yellow and 25.1° at red. A conversion
+that was subtly wrong would not line up with the skid state like that.
+
+Heading is interpolated the short way around the circle, or the arrow spins
+through a full turn whenever a run crosses ±π.
+
+The arrow is turned by the framing's own angle so it keeps pointing down the
+track when the map is rotated, and the screen angle is negated because the image
+has Y increasing downward.
+
 Marker radius shrinks by kart index, and the skid and nitro rings are offset from
 that radius rather than fixed. Two runs of the same track sit exactly on top of
 each other at the start line, and Tk canvas items have no alpha, so without
 differing radii the second kart would completely hide the first.
+
+**Rotation locks to 0° the moment a replay is loaded** (`lock_rotation`,
+called from `use_replay`), and the Rotate control is disabled while it holds.
+A rotated map is fine for a diagram; a rotated *replay* would mean the thing
+being studied no longer visually matches what actually happened in the race,
+which defeats the point of a replay viewer. There's no "close replay" action
+anywhere in the app, so nothing currently re-enables the control once a
+replay has been loaded - matching intent, not an oversight, since there's
+nothing to revert to.
 
 ## Check lines
 
@@ -173,6 +265,53 @@ Lap lines are frequently much shorter than the gates — Hacienda's are two
 2-unit segments at the edges of the start line, against `activate` gates
 spanning ~26 units — so they can render as only a few pixels. That is the real
 geometry.
+
+### Sector splits
+
+`compute_splits` turns the same check lines into per-lap sector times, using
+`_seg_intersect_frac` (standard 2D segment-segment intersection, solving for
+both parametric fractions and requiring each in [0, 1]) walked once forward
+through the recorded path.
+
+Two things had to be established against real data before trusting any of
+this, not assumed from the XML shape:
+
+- **Alternate-route gates share a `same-group` value.** Confirmed against
+  Hacienda's `scene.xml` directly: indices 3 and 4 (both `kind="activate"`)
+  carry an identical `same-group="3 4"` for the fork after the loop. That
+  value only means what it looks like it means if check indices are counted
+  over **every** direct child of `<checks>` in document order, including
+  `check-lap`, which has no geometry of its own — indices computed by
+  searching for `<check-line>` alone come out wrong. `sector_gates` groups
+  lines by their literal `same-group` tuple; STK always gives even a lone
+  gate a self-referential id (`same-group="1"` on a line at index 1), so the
+  grouping key needs no separate index field on `CheckLine`.
+- **The lap line itself can't be used to find lap boundaries.** The obvious
+  design was to detect the lap-line crossing the same way as a gate crossing.
+  It doesn't work: on Hacienda the two lap-line segments sit at x≈-5 and
+  x≈+5, both at z≈0, while the real racing line crosses z=0 near x≈0 -
+  between them, touching neither. A kart driving down the middle of the road
+  never intersects either segment. `compute_splits` instead anchors each
+  lap's start/end on the frame range `lap_frame_range` already gives
+  (distance-based, ±0.6s or so) and only uses geometric crossing detection
+  for the gates in between, which are wide enough to actually catch a normal
+  line. Sector 1 and the last sector inherit that ±0.6s; the gate-to-gate
+  sectors between them are exact.
+
+One accounting bug worth remembering if this gets touched again: the natural
+loop produces `len(gates)` sectors (start→gate0, gate0→gate1, ...,
+gate[n-2]→gate[n-1]) and silently drops the trailing leg from the last gate to
+the lap boundary. That leg is real track - on the replay used to validate this
+it was 3.6s, not a rounding error - and it undercounts every lap by that
+amount unless appended as sector `n+1`. Caught by summing a lap's sectors and
+comparing to its `total`; they must match exactly (verified to 0.000 across
+every completed lap in the local replay set once fixed).
+
+Validated against all 113 replays available at the time (local recordings
+plus the ones that ship with 1.5): no exceptions, no negative sector times,
+and sector sums equal to lap totals wherever no gate was missed. Across four
+different tracks (Hacienda, Scotland, Zengarden, Around the Lighthouse) with
+gate counts from 3 to 7.
 
 ## Replay files
 
@@ -277,6 +416,46 @@ the time difference at a given corner is the number that says where a run was
 won or lost. Sanity check: two real Hacienda runs 14.98s apart in final time
 converge to a 15.00s gap by the end of the run.
 
+## Watching alongside the real game (investigated, not shipped)
+
+A "Launch SuperTuxKart" button existed briefly (v1.2.0 development) and was
+pulled back out before release - not because it didn't work, but because a
+loose "open both, no sync" version wasn't worth having yet on its own, with
+real two-way sync (pause one, both pause; scrub one, both scrub) planned for
+later. The investigation behind that decision is worth keeping, so it isn't
+redone from scratch next time:
+
+Read the actual replay/ghost source in `stk-code` (`replay_play.hpp`,
+`ghost_kart.cpp`, `history.hpp`) rather than guess. Findings:
+
+- `GhostKart::update(int ticks)` positions a ghost by interpolating between
+  two recorded transforms using a tick index into the replay - structurally
+  the same technique this file uses for marker interpolation. That means
+  rewind isn't blocked by the data model, only by nothing in STK ever driving
+  that tick backward.
+- Neither `ReplayPlay`, `GhostKart`, nor `History` (a separate, older,
+  forward-only input-log replay system used for physics debugging, not the
+  same thing as `.replay` ghost files) exposes pause, seek, rewind, or a
+  speed control. The only pause is the generic whole-race pause, which
+  freezes ghosts as a side effect of freezing the world clock.
+- No CLI flag opens STK directly on a chosen `.replay`; `--history` replays a
+  fixed `history.dat`, unrelated to ghost files. The user would have to pick
+  it from STK's own Replay screen by hand regardless.
+- No IPC, socket, or scriptable hook exposes live game state externally.
+  `NETWORKING.md`'s only console is server admin (kick/ban). The only place
+  STK streams live per-kart transforms is its actual multiplayer protocol,
+  built for real races between real clients, not for reading state out of an
+  offline solo replay.
+
+Genuine two-way sync would mean patching STK itself - `GhostKart`'s
+tick-indexed design suggests it's a small, well-isolated patch rather than a
+rewrite - but that turns this from a script into a fork of the game, with the
+maintenance and trust costs that implies. Locating the executable, for
+whenever this is picked back up, doesn't need reinventing either: derive it
+the same way `default_track_dirs` locates the game's data (PATH first, a
+binary next to an already-found `data/tracks` directory, a couple of fixed
+spots on macOS, a flatpak fallback).
+
 ## Known gaps / not implemented
 
 - Soccer goal-line node coloring (`ArenaGraph::differentNodeColor` paints red/blue
@@ -330,6 +509,59 @@ Windows and macOS paths are exercised against simulated install trees (a
 Program Files layout, an `%APPDATA%` replay folder and a Steam
 `libraryfolders.vdf`), which proves the path construction and the vdf parsing
 but not the real-world install locations. Nothing here has run on Windows.
+
+The Render/Replay tab split, the splits panel, CSV export, and keyboard
+control (space, arrows, home/end) were all driven the same way, plus one
+methodology trap worth recording: comparing the *displayed* clock label
+(`_mmss`, one decimal place) between two single-frame steps can show no change
+even though the step happened correctly - two adjacent frames a tenth of a
+second apart can round to the same text. Assert against the underlying
+`rp_t` float, not the label, when testing frame-stepping. Caught this by
+reading `rp_t` through the bound method captured in a `root.bind` closure's
+`__self__`, since the App instance has no other handle from outside `run_gui`.
+
+That same closure-capture trick surfaced a second, sharper methodology gap:
+`widget.event_generate(seq)` and `root.focus_get()` are **not reliable** under
+a headless Tk instance. `.focus_set()` calls on a Scale/Treeview/Button
+silently failed to move focus in this environment - `focus_get()` kept
+reporting the listbox regardless of what had just been focused - so a test
+that checks "did the toplevel binding fire after focusing widget X" can pass
+in the harness while the real, windowed, real-focus behaviour is still
+broken. This is exactly what happened with space/arrow playback control:
+tested via `root.event_generate` (bypasses real focus routing entirely) and
+via `.focus_set()` + `event_generate` (silently didn't move focus here), both
+looked fine, and space still didn't work for the user because ttk.Button,
+Checkbutton, Scale, Treeview and Listbox all have default bindings for
+space/arrows that fire at the widget's own bindtag *before* a toplevel
+binding is ever reached - so focus landing on the scrub slider you'd just
+dragged, or any button, silently ate the keypress. The fix that's actually
+reliable regardless of focus: `harden_playback_keys` walks the tree at
+startup and rebinds space/arrows/home/end directly on every widget of those
+five types, each handler returning `"break"` so the widget's own default
+action doesn't also fire. The right way to *test* this, once identified: call
+`widget.event_generate(seq)` directly **on the specific widget** rather than
+on `root` or via `focus_set`, since that reliably invokes that widget's own
+bindtags regardless of whatever a headless display reports as focused.
+Verified this way on all five widget types, confirming both that play/pause
+now fires and that the widget's own action (button re-click, scale nudge)
+does not also fire alongside it.
+
+`invert_x_z` was found to be silently absent from `draw_replay_overlay` -
+checklines and the map itself already respected it, the replay route didn't.
+Fixed by threading it through the same way, and cross-checked against real
+`stk-code` (`Track::mapPoint2MiniMap`, `Track::loadArenaGraph`): the mirror
+STK actually applies is exactly "negate both X and Z, keep the same
+already-computed bounding box" - confirmed by reading the source rather than
+trusting the README's pre-existing claim about it - and is only ever true in
+soccer mode for a kart on the blue team.  Rendering it against Hacienda (an
+ordinary, markedly asymmetric race track) at first looked broken - almost the
+whole mirrored track fell outside the frame - until re-reading
+`Graph::makeMiniMap`'s camera setup confirmed STK really does reuse the
+un-mirrored bounding box for the camera regardless of the mirror, so a
+markedly asymmetric track *should* render that way once inverted; re-tested
+against an actual soccer arena (`icy_soccer_field`, roughly symmetric by
+design) and got a sane, fully-visible mirrored field, which is what confirmed
+the implementation rather than the test track was the issue.
 
 Deps are `python-pillow` and, optionally, `python-numpy`; the GUI additionally needs
 `tk` and `python-pillow`'s ImageTk.

@@ -181,6 +181,13 @@ moment it does it:
 | **Red**, close in | red skid earned |
 | **Cyan**, further out | nitro burning |
 
+The marker is an arrow showing which way the kart is **pointing**, taken from
+the orientation stored in the replay. That isn't the same as the way it's
+moving: the difference is the slip angle, and it's the thing you can't see from
+a dot. On a straight it's essentially zero; through a charged red skid the kart
+runs about 25° sideways to its own direction of travel. Watching the arrow swing
+out and come back is watching the drift.
+
 Karts are drawn slightly smaller each, so when two runs are on the same corner —
 or exactly on top of each other, as they are at the start — the larger one's rim
 stays visible around the smaller one and you can still see both.
@@ -229,6 +236,52 @@ The map has to match the replay: opening one selects its track for you, and if
 that track isn't installed it'll say so rather than draw the run on the wrong
 map.
 
+### When a shortcut goes off the map
+
+Some tracks have shortcuts that leave the area STK actually built the minimap
+from — Cocoa Temple's is the one that turns this up, but it isn't the only
+one. The route and the kart marker used to just vanish for however long the
+run was off that area, since anything drawn outside the canvas is silently
+clipped rather than an error. The window and every `--replay` render now grow
+the canvas to fit the whole recorded path when this happens, so the shortcut
+stays fully visible — you'll see the game-accurate map in its usual position
+with a bit of extra canvas around whichever side the shortcut went off. This
+only ever triggers when a replay's path genuinely leaves the frame; an
+ordinary run never changes the output at all.
+
+### Sector splits
+
+Below the playback controls, the **Splits** panel breaks the loaded run into
+sectors using the track's own `activate` check lines — the gates a route has
+to cross in order for a lap to count. Each row is a lap; the last row is the
+**theoretical best**, the fastest time seen in each sector across every lap in
+the file, added up. Only tracks with check lines have this; most stock tracks
+do.
+
+**Export splits CSV…** writes that table to a file. **Export telemetry
+CSV…** writes the whole recording — position, speed, heading, nitro, skid
+level, lap, distance — one row per frame, for anyone who wants to do more with
+it than this window shows.
+
+### Keyboard
+
+With a replay loaded: **Space** plays or pauses, **←/→** step one recorded
+frame at a time (pausing first, so stepping is predictable), **Home/End** jump
+to the start or end. These work regardless of which control last had focus —
+clicking the scrub slider, a button, or the splits table won't swallow them.
+They don't fire while you're typing in a text box.
+
+### Orientation always matches the game
+
+Once a replay is loaded, **Rotate** locks to 0° and greys out. A rotated view
+is genuinely useful for a diagram, but not for a replay — a replay is only
+useful if what you're looking at is trustworthy against what actually
+happened, so there's no way to leave one rotated by accident. `--invert-x-z`
+(the mirroring the game itself does for the blue soccer team) is threaded
+through the same way, for the same reason, though it never applies to a
+`.replay` file in practice — ghost replays are time-trial only, and the
+mirror is soccer-only.
+
 ---
 
 ## Command line
@@ -241,6 +294,13 @@ map.
 ./stk_minimap.py --all -O ./minimaps --style clean    # everything, into a folder
 ./stk_minimap.py ~/Downloads/mytrack.zip --style clean    # an addon archive
 ./stk_minimap.py /path/to/some/track_folder      # an unpacked track
+
+./stk_minimap.py --replay run.replay                    # route over its map;
+                                                          # the track name is
+                                                          # read from the file
+./stk_minimap.py --replay mine.replay --compare wr.replay --checklines
+./stk_minimap.py --replay run.replay --splits            # sector splits, printed
+./stk_minimap.py --replay run.replay --csv laps.csv --splits-csv splits.csv
 ```
 
 `--list` on a stock SuperTuxKart 1.5 install finds 44 tracks; 38 of them have a
@@ -272,6 +332,13 @@ which have no driveline).
 | `--gui` | open the window |
 | `--install-desktop` | Linux: add a launcher to the applications menu |
 | `--version` | print the version |
+| `--replay FILE` | overlay a run's route; track can be omitted, it's read from the file |
+| `--compare FILE` | overlay a second run alongside `--replay` |
+| `--replay-colour` | `speed` (default), `nitro`, or `plain` |
+| `--replay-lap` | `all` (default) or a 1-based lap number |
+| `--csv FILE` | write `--replay`'s per-frame telemetry to a CSV |
+| `--splits` | print `--replay`'s sector splits (needs check lines) |
+| `--splits-csv FILE` | write `--replay`'s sector splits to a CSV |
 
 ---
 

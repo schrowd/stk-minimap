@@ -33,9 +33,10 @@ Examples
 
 from __future__ import annotations
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 
 import argparse
+import csv
 import glob
 import html
 import json
@@ -486,6 +487,7 @@ class CheckLine:
     kind: str                       # "lap" or "activate"
     p1: tuple[float, float]         # x, z
     p2: tuple[float, float]
+    same_group: tuple[int, ...] = ()   # shared by alternate-route lines
 
 
 def _check_point(s):
@@ -516,7 +518,14 @@ def load_checklines(directory: str) -> list[CheckLine]:
     Check lines live in scene.xml, not in the graph files.
 
     'lap' lines count a lap; 'activate' lines are the gates that have to be
-    crossed in order, which is what stops a shortcut from counting.
+    crossed in order, which is what stops a shortcut from counting.  Some
+    tracks give two 'activate' lines the same 'same-group' value to mark them
+    as alternate routes to the one logical gate - verified against Hacienda's
+    scene.xml, where lines 3 and 4 both carry same-group="3 4" for the fork
+    after the loop.  Reading same-group needs the true STK check index, which
+    only holds if we walk <checks>'s direct children in order (including
+    check-lap, which has no geometry of its own) rather than searching the
+    whole tree for <check-line> alone.
     """
     path = os.path.join(directory, "scene.xml")
     if not os.path.isfile(path):
@@ -525,12 +534,192 @@ def load_checklines(directory: str) -> list[CheckLine]:
         root = read_xml(path)
     except SystemExit:
         return []
+    checks = root.find(".//checks")
+    if checks is None:
+        # no <checks> container to index against - same-group can't be
+        # resolved, so fall back to ungrouped lines (each its own gate)
+        out = []
+        for el in root.iter("check-line"):
+            p1, p2 = _check_point(el.get("p1")), _check_point(el.get("p2"))
+            if p1 and p2:
+                out.append(CheckLine((el.get("kind") or "").strip(), p1, p2))
+        return out
+
     out = []
-    for el in root.iter("check-line"):
+    for el in checks:
+        if el.tag != "check-line":
+            continue
         p1, p2 = _check_point(el.get("p1")), _check_point(el.get("p2"))
         if p1 and p2:
-            out.append(CheckLine((el.get("kind") or "").strip(), p1, p2))
+            sg = tuple(int(v) for v in (el.get("same-group") or "").split()
+                       if v.isdigit())
+            out.append(CheckLine((el.get("kind") or "").strip(), p1, p2, sg))
     return out
+
+
+def _seg_intersect_frac(p, q, a, b) -> float | None:
+    """
+    Where segment p->q crosses segment a->b, as a fraction of p->q, or None.
+
+    Standard 2D line-segment intersection by solving p + t(q-p) = a + u(b-a);
+    both t and u have to land in [0, 1] for the segments to actually meet, not
+    just their infinite extensions.
+    """
+    rx, rz = q[0] - p[0], q[1] - p[1]
+    sx, sz = b[0] - a[0], b[1] - a[1]
+    den = rx * sz - rz * sx
+    if abs(den) < 1e-12:
+        return None
+    qpx, qpz = a[0] - p[0], a[1] - p[1]
+    t = (qpx * sz - qpz * sx) / den
+    u = (qpx * rz - qpz * rx) / den
+    return t if 0.0 <= t <= 1.0 and 0.0 <= u <= 1.0 else None
+
+
+def sector_gates(checks: list[CheckLine]) -> list[list[CheckLine]]:
+    """
+    'activate' lines grouped into logical gates, in track order.
+
+    STK gives alternate-route lines an identical same-group value - verified
+    against Hacienda, where the fork after the loop has two lines both marked
+    same-group="3 4" - so lines sharing that value are one gate, either one
+    counts as crossing it.  Real track data always gives even a lone gate a
+    self-referential group id, so the fallback key (for data that somehow
+    doesn't) only matters for malformed input.
+    """
+    groups: dict[tuple, list[CheckLine]] = {}
+    order = []
+    for i, c in enumerate(checks):
+        if c.kind != "activate":
+            continue
+        key = c.same_group if c.same_group else (f"_{i}",)
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(c)
+    return [groups[k] for k in order]
+
+
+@dataclass
+class LapSplit:
+    lap: int                            # 0-based
+    sectors: list[float | None]         # per gate; None if that gate was missed
+    total: float | None                 # None if the lap never finished
+
+
+def compute_splits(kart: "ReplayKart", checks: list[CheckLine]) -> list[LapSplit]:
+    """
+    Sector times from the track's own 'activate' check lines.
+
+    The lap line itself turns out not to be usable for this: on Hacienda its
+    two segments sit at x roughly -5 and +5 astride z=0, while the actual
+    racing line crosses z=0 near x=0 - between them, touching neither.  A
+    normal line down the middle of the track never intersects it.  So instead
+    of a fresh crossing test for lap boundaries, this uses the frame range
+    that kart.lap / lap_frame_range already give (the distance-based split,
+    good to roughly 0.6s), and finds each gate's first genuine geometric
+    crossing inside that range.  Gate-to-gate sectors are exact; only the
+    first sector (lap start) and the last (to lap end) inherit that ~0.6s.
+
+    A gate can still be legitimately missed - a replay predating a track
+    edit, a frame landing exactly on the boundary - so a miss produces None
+    for that sector rather than raising or misaligning the rest of the row.
+    """
+    gates = sector_gates(checks)
+    n = len(kart)
+    if not gates or not kart.lap or n < 2:
+        return []
+
+    def first_crossing(lines, start, end):
+        for i in range(start, end):
+            p = (kart.x[i], kart.z[i])
+            q = (kart.x[i + 1], kart.z[i + 1])
+            for c in lines:
+                f = _seg_intersect_frac(p, q, c.p1, c.p2)
+                if f is not None:
+                    return kart.time[i] + (kart.time[i + 1] - kart.time[i]) * f, i
+        return None, None
+
+    laps: list[LapSplit] = []
+    for lap_no in range(max(kart.lap) + 1):
+        a, b = lap_frame_range(kart, lap_no)
+        if b <= a:
+            continue
+        lap_start_t, lap_end_t = kart.time[a], kart.time[b]
+
+        # len(gates) + 1 sectors: start->gate0, gate0->gate1, ..., and the
+        # trailing leg from the last gate to the lap boundary, which is real
+        # track and has to be accounted for or the sectors undercount the lap
+        sectors: list[float | None] = []
+        prev_t, cursor = lap_start_t, a
+        for group in gates:
+            t, gi = first_crossing(group, cursor, b)
+            if t is None:
+                sectors.append(None)
+                continue
+            sectors.append(t - prev_t)
+            prev_t, cursor = t, gi
+        sectors.append(lap_end_t - prev_t)
+
+        laps.append(LapSplit(lap_no, sectors, lap_end_t - lap_start_t))
+    return laps
+
+
+def format_splits(laps: list[LapSplit]) -> str:
+    """A console-friendly splits table, with a theoretical best row."""
+    if not laps:
+        return "(no splits - this track has no check lines, or nothing to split)"
+    n = len(laps[0].sectors)
+    lines = ["Lap   " + "".join(f"{'S' + str(i + 1):<7}" for i in range(n)) + "Total"]
+    best: list[float | None] = [None] * n
+    for ls in laps:
+        cells = []
+        for i, s in enumerate(ls.sectors):
+            cells.append(f"{s:6.2f} " if s is not None else " MISS  ")
+            if s is not None and (best[i] is None or s < best[i]):
+                best[i] = s
+        tot = f"{ls.total:6.2f}" if ls.total is not None else "  ??? "
+        lines.append(f"{ls.lap + 1:<4}  " + "".join(cells) + tot)
+    if len(laps) > 1 and all(b is not None for b in best):
+        lines.append("")
+        lines.append("Theoretical best: " + "  ".join(f"{b:5.2f}" for b in best) +
+                     f"   =  {sum(best):.2f}")
+    return "\n".join(lines)
+
+
+def write_replay_csv(path: str, entries: list[tuple[str, "ReplayKart"]]) -> None:
+    """Per-frame telemetry for one or more karts, one row per kart per frame."""
+    with open(path, "w", newline="", encoding="utf-8") as fh:
+        w = csv.writer(fh)
+        w.writerow(["kart", "time", "lap", "x", "y", "z", "speed_kmh",
+                    "heading_deg", "nitro_amount", "nitro_use", "skid_level",
+                    "zipper", "item_amount", "item_type", "distance"])
+        for label, kart in entries:
+            for i in range(len(kart)):
+                w.writerow([
+                    label, f"{kart.time[i]:.3f}",
+                    kart.lap[i] + 1 if kart.lap else "",
+                    f"{kart.x[i]:.3f}", f"{kart.y[i]:.3f}", f"{kart.z[i]:.3f}",
+                    f"{kart.speed[i] * 3.6:.2f}",
+                    f"{math.degrees(kart.heading[i]):.1f}" if kart.heading else "",
+                    f"{kart.nitro_amount[i]:.0f}", int(kart.nitro_use[i]),
+                    kart.skid_level(i), int(kart.zipper[i]),
+                    kart.item_amount[i], kart.item_type[i],
+                    f"{kart.distance[i]:.2f}"])
+
+
+def write_splits_csv(path: str, laps: list[LapSplit]) -> None:
+    if not laps:
+        raise SystemExit("no splits to write - this track has no check lines, "
+                         "or the replay has no completed laps")
+    n = len(laps[0].sectors)
+    with open(path, "w", newline="", encoding="utf-8") as fh:
+        w = csv.writer(fh)
+        w.writerow(["lap"] + [f"sector_{i + 1}" for i in range(n)] + ["total"])
+        for ls in laps:
+            w.writerow([ls.lap + 1] +
+                       [f"{s:.3f}" if s is not None else "" for s in ls.sectors] +
+                       [f"{ls.total:.3f}" if ls.total is not None else ""])
 
 
 def track_kind(ti: TrackInfo) -> str:
@@ -635,6 +824,62 @@ def make_framing(g: Graph, size: int, fit: bool, margin: float,
     rng = max(dx, dz, 1e-6)
     scaling = size / rng
     return Framing(x0, z0, scaling, size, size, ang, cx, cz)
+
+
+def expand_framing_for_replay(fr: Framing, karts: list, margin_frac: float = 0.03,
+                              ) -> Framing:
+    """
+    Grow the canvas to fit a replay's actual path, without touching the
+    in-game-accurate part of the mapping.
+
+    A shortcut can genuinely leave the driveline graph's bounding box - real
+    example, the shipped Cocoa Temple world record dips 14.8 world units past
+    the graph's min Z, which is 16.7px at the default size, enough that 7% of
+    its recorded frames land outside a plain [0, height] canvas and silently
+    vanish (PIL clips a Draw call that goes off-canvas rather than erroring,
+    so nothing looks wrong until you look for the missing corner).
+
+    The fix only ever adds canvas space; scaling, angle and pivot are
+    untouched, so a point that was already on the map lands on the exact same
+    pixel it always did - this is a translation of where "pixel (0, 0)" sits,
+    not a rescale, so it doesn't reopen the "always matches the in-game
+    minimap" guarantee the way --fit or --rotate legitimately do.  Returns
+    the same object, unchanged, when nothing needs to grow - every replay
+    that stays on the driveline, which is nearly all of them.
+    """
+    lo_x = fr.origin_x
+    hi_x = fr.origin_x + fr.width / fr.scaling
+    lo_z = fr.origin_z
+    hi_z = fr.origin_z + fr.height / fr.scaling
+
+    xs, zs = [], []
+    for k in karts:
+        for x, z in zip(k.x, k.z):
+            xs.append(x)
+            zs.append(z)
+    if not xs:
+        return fr
+    if fr.angle:
+        pts = [fr.spin(x, z) for x, z in zip(xs, zs)]
+        xs = [p[0] for p in pts]
+        zs = [p[1] for p in pts]
+
+    left = max(0.0, lo_x - min(xs))
+    right = max(0.0, max(xs) - hi_x)
+    bottom = max(0.0, lo_z - min(zs))
+    top = max(0.0, max(zs) - hi_z)
+    if left == right == bottom == top == 0.0:
+        return fr
+
+    pad = margin_frac * max(fr.width, fr.height) / fr.scaling
+    left, right, bottom, top = (v + pad for v in (left, right, bottom, top))
+
+    new_origin_x = fr.origin_x - left
+    new_origin_z = fr.origin_z - bottom
+    new_width = max(1, round(fr.width + (left + right) * fr.scaling))
+    new_height = max(1, round(fr.height + (top + bottom) * fr.scaling))
+    return Framing(new_origin_x, new_origin_z, fr.scaling, new_width,
+                   new_height, fr.angle, fr.cx, fr.cz)
 
 
 # --------------------------------------------------------------------------
@@ -810,7 +1055,8 @@ def _morph(img: Image.Image, r: int, erode: bool) -> Image.Image:
 def render(g: Graph, fr: Framing, style: str, ss: int, show_invisible: bool,
            invert_x_z: bool, outline_px: float, title: str | None,
            background: str | None, seal: bool = True,
-           checklines: list | None = None) -> Image.Image:
+           checklines: list | None = None,
+           replay: ReplayOverlay | None = None) -> Image.Image:
     pal = dict(STYLES[style])
     if background:
         pal["bg"] = parse_color(background)
@@ -877,6 +1123,11 @@ def render(g: Graph, fr: Framing, style: str, ss: int, show_invisible: bool,
                        width=width)
             put(_CHECK_COLOURS.get(kind, _CHECK_COLOURS["activate"]), mask)
 
+    # the replay route goes on top of everything else, same reasoning as
+    # check lines: it is an annotation over the map, not part of it
+    if replay:
+        draw_replay_overlay(img, ss_fr, replay, ss, invert_x_z)
+
     out = _downscale(img, (fr.width, fr.height), pal["bg"][:3])
 
     if title:
@@ -889,6 +1140,79 @@ def render(g: Graph, fr: Framing, style: str, ss: int, show_invisible: bool,
         d.text((pad, fr.height - pad), title, font=font, fill=col, anchor="ls")
 
     return out
+
+
+@dataclass
+class ReplayOverlay:
+    """What --replay / --compare draw onto a static render."""
+    entries: list[tuple[str, object, str]]   # label, ReplayKart, base colour
+    colour_mode: str = "speed"      # "speed" | "nitro" | "plain"
+    lap: int | None = None          # None = every lap
+    show_items: bool = True
+
+
+def draw_replay_overlay(img: Image.Image, fr: Framing, overlay: ReplayOverlay,
+                        ss: int, invert_x_z: bool = False) -> None:
+    """
+    The static route for --replay / --compare, drawn straight into the
+    supersampled buffer the map itself uses, so line weight and antialiasing
+    match everything else in the image.  Mirrors the GUI's live rp_draw_static
+    minus the moving marker - a still image has no "now".
+
+    invert_x_z has to be threaded through here too, or a replay rendered with
+    --invert-x-z would show the track mirrored but the route not - checklines
+    and the map itself already apply it, so the route can't be the odd one
+    out.  Moot for every ghost .replay that actually exists today (they're
+    all time-trial; the mirror only ever applies in soccer), but the render
+    path should stay consistent regardless of what's plugged into it.
+    """
+    d = ImageDraw.Draw(img)
+
+    def seg(pts, i0, i1, lo, hi, colour, width):
+        i0, i1 = max(i0, lo), min(i1, hi)
+        if i1 > i0:
+            d.line(pts[i0:i1 + 1], fill=colour,
+                   width=max(1, int(round(width * ss))))
+
+    for _label, kart, base in overlay.entries:
+        if len(kart) < 2:
+            continue
+        if invert_x_z:
+            pts = [fr.to_px(-x, -z) for x, z in zip(kart.x, kart.z)]
+        else:
+            pts = [fr.to_px(x, z) for x, z in zip(kart.x, kart.z)]
+        a, b = lap_frame_range(kart, overlay.lap)
+
+        if overlay.colour_mode == "speed":
+            top = max(kart.speed) or 1.0
+            for i0, i1, bucket in _runs_by(kart.speed, lambda s:
+                                          min(7, int(8 * s / top))):
+                seg(pts, i0, i1, a, b, _SPEED_RAMP[bucket], 3)
+        elif overlay.colour_mode == "nitro":
+            seg(pts, a, b, a, b, "#4a5568", 2)
+            levels = [kart.skid_level(i) for i in range(len(kart))]
+            for i0, i1, lv in _runs_by(levels, lambda v: v):
+                if lv >= 2:
+                    seg(pts, i0, i1, a, b, _SKID_COLOURS[lv], 3)
+            for i0, i1, on in _runs_by(kart.nitro_use, bool):
+                if on:
+                    seg(pts, i0, i1, a, b, "#39e0ff", 3)
+        else:
+            seg(pts, a, b, a, b, base, 2)
+
+        if overlay.show_items:
+            r = 4 * ss
+            for i0, i1, on in _runs_by(kart.zipper, bool):
+                if on and a <= i0 <= b:
+                    x, y = pts[i0]
+                    d.ellipse([x - r, y - r, x + r, y + r],
+                             outline="#ffd23f", width=max(1, round(2 * ss)))
+            r = 5 * ss
+            for i in kart.item_uses():
+                if a <= i <= b:
+                    x, y = pts[i]
+                    d.polygon([(x, y - r), (x + r, y), (x, y + r), (x - r, y)],
+                             fill="#ff4fd8")
 
 
 def parse_color(s: str):
@@ -1074,7 +1398,18 @@ class ReplayKart:
     item_amount: list[int] = field(default_factory=list)
     item_type: list[int] = field(default_factory=list)
     distance: list[float] = field(default_factory=list)
+    heading: list[float] = field(default_factory=list)   # radians in world XZ
     lap: list[int] = field(default_factory=list)     # 0-based, per frame
+
+    def heading_at(self, i: int, frac: float = 0.0) -> float:
+        """Heading between two frames, taking the short way round the circle."""
+        if not self.heading:
+            return 0.0
+        h = self.heading[i]
+        if frac <= 0.0 or i + 1 >= len(self.heading):
+            return h
+        d = (self.heading[i + 1] - h + math.pi) % (2 * math.pi) - math.pi
+        return h + d * frac
 
     def __len__(self) -> int:
         return len(self.time)
@@ -1305,6 +1640,13 @@ def load_replay(path: str) -> Replay:
             k.zipper.append(r[22] != 0)
             k.skid_effect.append(r[23])
             k.red_skid.append(r[24] != 0)
+            # which way the kart is *pointing*, from the recorded quaternion:
+            # local +Z turned into world space.  Not the same as the direction
+            # of travel - the difference is the slip angle, and it grows from
+            # 0.3 degrees when straight to 25 when a red skid is charged.
+            qx, qy, qz, qw = r[4], r[5], r[6], r[7]
+            k.heading.append(math.atan2(2.0 * (qx * qz + qy * qw),
+                                        1.0 - 2.0 * (qx * qx + qy * qy)))
         k.lap = split_laps(k, rp.laps)
         rp.karts.append(k)
 
@@ -1351,7 +1693,27 @@ def resolve_track(arg: str, extra_dirs: list[str], tmpdirs: list[str]) -> str:
     raise SystemExit(msg)
 
 
-def build(track_dir: str, args) -> tuple[Image.Image, Framing, Graph, TrackInfo]:
+_REPLAY_CLI_COLOURS = ("#ffe066", "#7ce38b")   # A, B - same as _KART_COLOURS[:2]
+
+
+def _read_replay_or_die(path: str, header_only: bool = False) -> Replay:
+    """A bad --replay/--compare path is a command-line typo, not a crash."""
+    try:
+        return replay_header(path) if header_only else load_replay(path)
+    except OSError as exc:
+        raise SystemExit(f"{path}: {exc.strerror or exc}")
+
+
+def build(track_dir: str, args,
+         extra_karts: list | None = None) -> tuple[Image.Image, Framing, Graph, TrackInfo]:
+    """
+    extra_karts: karts to grow the canvas for, whether or not they're drawn
+    by this call.  The GUI's live view draws replay overlays itself, straight
+    onto the Tk canvas, rather than through render()'s replay= parameter - but
+    it still needs the same "don't clip a shortcut" framing expansion this
+    function already does for --replay, so it passes the loaded replay's
+    karts in here to get it without duplicating the graph/checkline loading.
+    """
     ti = read_track_info(track_dir)
     g = load_graph_for_track(ti, args.reverse, args.full_polys)
     if not g.nodes:
@@ -1361,10 +1723,49 @@ def build(track_dir: str, args) -> tuple[Image.Image, Framing, Graph, TrackInfo]
     title = ti.name if args.title else None
     checks = load_checklines(track_dir) if getattr(args, "checklines", False) \
         else None
+
+    replay_overlay = None
+    rp_path = getattr(args, "replay", None)
+    if rp_path:
+        rp = _read_replay_or_die(rp_path)
+        if rp.track != ti.ident:
+            raise SystemExit(f"{rp_path}: recorded on {rp.track!r}, not "
+                             f"{ti.ident!r}")
+        entries = [(rp.karts[0].name or rp.karts[0].ident or "A",
+                   rp.karts[0], _REPLAY_CLI_COLOURS[0])]
+        cmp_path = getattr(args, "compare", None)
+        if cmp_path:
+            rp2 = _read_replay_or_die(cmp_path)
+            if rp2.track != ti.ident:
+                raise SystemExit(f"{cmp_path}: recorded on {rp2.track!r}, "
+                                 f"not {ti.ident!r}")
+            entries.append((rp2.karts[0].name or rp2.karts[0].ident or "B",
+                           rp2.karts[0], _REPLAY_CLI_COLOURS[1]))
+        lap_arg = str(getattr(args, "replay_lap", "all") or "all")
+        if lap_arg.lower() == "all":
+            lap = None
+        else:
+            try:
+                lap = int(lap_arg) - 1
+            except ValueError:
+                raise SystemExit(f"--replay-lap: {lap_arg!r} is not 'all' "
+                                 f"or a lap number")
+        replay_overlay = ReplayOverlay(
+            entries, getattr(args, "replay_colour", "speed") or "speed",
+            lap, True)
+
+    # a shortcut can leave the driveline graph's bounding box - grow the
+    # canvas to fit the whole recorded path rather than silently clip it
+    expand_karts = list(extra_karts or [])
+    if replay_overlay:
+        expand_karts += [k for _l, k, _c in replay_overlay.entries]
+    if expand_karts:
+        fr = expand_framing_for_replay(fr, expand_karts)
+
     img = render(g, fr, args.style, args.supersample, args.show_invisible,
                  args.invert_x_z, args.outline, title, args.background,
                  seal=not args.no_seal and args.style != "exact",
-                 checklines=checks)
+                 checklines=checks, replay=replay_overlay)
     return img, fr, g, ti
 
 
@@ -1396,8 +1797,33 @@ _CHECK_COLOURS = {"activate": (55, 201, 255, 255), "lap": (255, 59, 48, 255)}
 _SKID_NAMES = {0: "", 1: "skid", 2: "YELLOW SKID", 3: "RED SKID"}
 
 
+def arrow_points(x: float, y: float, angle: float, r: float) -> list[float]:
+    """
+    A kart-shaped arrow centred near (x, y), pointing along a *screen* angle.
+
+    Four points rather than three: the notch in the tail is what makes the
+    direction obvious at the ten-or-so pixels these are drawn at.
+    """
+    out = []
+    for dist, off in ((1.75 * r, 0.0), (1.25 * r, 2.20),
+                      (0.55 * r, math.pi), (1.25 * r, -2.20)):
+        out += [x + math.cos(angle + off) * dist,
+                y + math.sin(angle + off) * dist]
+    return out
+
+
 def _mmss(t: float) -> str:
     return f"{int(t) // 60}:{t % 60:04.1f}"
+
+
+def lap_frame_range(kart, lap: int | None) -> tuple[int, int]:
+    """Frame range [a, b] for a lap, or the whole run when lap is None."""
+    if lap is None or not kart.lap:
+        return 0, len(kart) - 1
+    idx = [i for i, l in enumerate(kart.lap) if l == lap]
+    if not idx:
+        return 0, len(kart) - 1
+    return idx[0], idx[-1]
 
 
 def _runs_by(values, key):
@@ -1474,6 +1900,8 @@ def run_gui(extra_dirs: list[str]) -> int:
             self.rp_cache: list = []     # route projected to canvas coords
             self.rp_drawn_lap = None     # which lap the static layer shows
             self.rot_job = None          # pending debounced rotation redraw
+            self.splits_checks: list = []    # check lines for the loaded track
+            self.splits_data: list = []      # last computed LapSplit list
             root.title(f"STK Minimap {__version__}")
             root.minsize(880, 560)
 
@@ -1533,7 +1961,7 @@ def run_gui(extra_dirs: list[str]) -> int:
             ttk.Button(btns, text="Open .zip…",
                        command=self.open_zip).pack(side="left", expand=True, fill="x")
 
-            # ---- right: preview + options -----------------------------
+            # ---- right: preview + tabs ---------------------------------
             right = ttk.Frame(outer, padding=(10, 0, 0, 0))
             right.pack(side="left", fill="both", expand=True)
 
@@ -1548,9 +1976,19 @@ def run_gui(extra_dirs: list[str]) -> int:
                                   justify="left")
             self.info.pack(fill="x", pady=(6, 4))
 
-            opt = ttk.LabelFrame(right, text="Options", padding=6)
-            opt.pack(fill="x")
+            # Two tabs rather than one ever-growing column: rendering options
+            # and replay analysis are two different tasks, and stacking both
+            # in one frame was outgrowing the window.  Canvas, info line and
+            # the status bar below stay outside the notebook, so switching
+            # tabs never hides the preview or an in-progress save/export.
+            nb = ttk.Notebook(right)
+            nb.pack(fill="both", expand=True, pady=(2, 0))
+            tab_render = ttk.Frame(nb, padding=8)
+            tab_replay = ttk.Frame(nb, padding=8)
+            nb.add(tab_render, text="Render")
+            nb.add(tab_replay, text="Replay")
 
+            # ---- Render tab ---------------------------------------------
             self.style = tk.StringVar(value="clean")
             self.size = tk.IntVar(value=512)
             self.ss = tk.IntVar(value=4)
@@ -1561,7 +1999,7 @@ def run_gui(extra_dirs: list[str]) -> int:
             self.v_fit = tk.BooleanVar(value=False)
             self.v_full = tk.BooleanVar(value=False)
 
-            r1 = ttk.Frame(opt); r1.pack(fill="x", pady=2)
+            r1 = ttk.Frame(tab_render); r1.pack(fill="x", pady=2)
             ttk.Label(r1, text="Style").pack(side="left")
             cb = ttk.Combobox(r1, textvariable=self.style, width=10, state="readonly",
                               values=sorted(STYLES))
@@ -1576,15 +2014,20 @@ def run_gui(extra_dirs: list[str]) -> int:
                         textvariable=self.ss).pack(side="left", padx=(4, 12))
             ttk.Label(r1, text="Rotate").pack(side="left")
             self.rotate = tk.StringVar(value="0")
-            ttk.Spinbox(r1, from_=0, to=345, increment=15, width=5, wrap=True,
-                        textvariable=self.rotate).pack(side="left", padx=(4, 0))
+            self.rotate_spin = ttk.Spinbox(r1, from_=0, to=345, increment=15,
+                                           width=5, wrap=True,
+                                           textvariable=self.rotate)
+            self.rotate_spin.pack(side="left", padx=(4, 0))
             # watch the variable rather than the widget: the spinbox's own
             # command only fires for its arrows, so a typed angle would be
             # ignored.  Debounced, or every keystroke would trigger a render.
             self.rotate.trace_add("write", lambda *_: self.rotate_changed())
             ttk.Label(r1, text="°").pack(side="left")
+            self.rotate_lock_note = ttk.Label(r1, text="",
+                                              foreground="#6b7280")
+            self.rotate_lock_note.pack(side="left", padx=(6, 0))
 
-            r2 = ttk.Frame(opt); r2.pack(fill="x", pady=2)
+            r2 = ttk.Frame(tab_render); r2.pack(fill="x", pady=2)
             for text, var in (("Track name", self.v_title),
                               ("Check lines", self.v_checks),
                               ("Hidden quads", self.v_invis),
@@ -1594,11 +2037,15 @@ def run_gui(extra_dirs: list[str]) -> int:
                 ttk.Checkbutton(r2, text=text, variable=var,
                                 command=self.preview).pack(side="left", padx=(0, 10))
 
-            # ---- replay playback --------------------------------------
-            rp = ttk.LabelFrame(right, text="Replay", padding=6)
-            rp.pack(fill="x", pady=(6, 0))
+            r3 = ttk.Frame(tab_render); r3.pack(fill="x", pady=(10, 0))
+            self.save_btn = ttk.Button(r3, text="Save PNG…", command=self.save)
+            self.save_btn.pack(side="left")
+            self.all_btn = ttk.Button(r3, text="Save every track…",
+                                      command=self.save_all)
+            self.all_btn.pack(side="left", padx=6)
 
-            q1 = ttk.Frame(rp); q1.pack(fill="x")
+            # ---- Replay tab -----------------------------------------------
+            q1 = ttk.Frame(tab_replay); q1.pack(fill="x")
             ttk.Button(q1, text="Browse replays…",
                        command=self.browse_replays).pack(side="left")
             ttk.Button(q1, text="Open replay…",
@@ -1611,7 +2058,7 @@ def run_gui(extra_dirs: list[str]) -> int:
             self.rp_info = ttk.Label(q1, text="none loaded", anchor="w")
             self.rp_info.pack(side="left", padx=8, fill="x", expand=True)
 
-            q2 = ttk.Frame(rp); q2.pack(fill="x", pady=(5, 0))
+            q2 = ttk.Frame(tab_replay); q2.pack(fill="x", pady=(5, 0))
             self.rp_back = ttk.Button(q2, text="⏮", width=3,
                                       command=self.rp_restart, state="disabled")
             self.rp_back.pack(side="left")
@@ -1630,11 +2077,16 @@ def run_gui(extra_dirs: list[str]) -> int:
                                       anchor="e")
             self.rp_clock.pack(side="right")
 
+            ttk.Label(tab_replay,
+                     text="Space: play/pause    ←/→: step one frame    "
+                          "Home/End: start/end", anchor="w",
+                     foreground="#6b7280").pack(fill="x", pady=(3, 0))
+
             # One "colour by" choice rather than four layers that stack: drawing
             # speed, nitro and skids on the same line at once is what made the
             # map unreadable.  Laps stack too, so default to showing just the
             # one the playhead is in.
-            q3 = ttk.Frame(rp); q3.pack(fill="x", pady=(5, 0))
+            q3 = ttk.Frame(tab_replay); q3.pack(fill="x", pady=(5, 0))
             ttk.Label(q3, text="Lap").pack(side="left")
             self.rp_lap = tk.StringVar(value="Follow")
             self.rp_lap_box = ttk.Combobox(q3, textvariable=self.rp_lap, width=7,
@@ -1652,17 +2104,48 @@ def run_gui(extra_dirs: list[str]) -> int:
                             command=self.rp_redraw).pack(side="left")
             self.rp_lap.trace_add("write", lambda *_: self.rp_redraw())
             self.rp_colour.trace_add("write", lambda *_: self.rp_redraw())
-            self.rp_readout = ttk.Label(rp, text="", anchor="w", justify="left")
+            self.rp_readout = ttk.Label(tab_replay, text="", anchor="w",
+                                        justify="left")
             self.rp_readout.pack(fill="x", pady=(5, 0))
 
-            r3 = ttk.Frame(right); r3.pack(fill="x", pady=(8, 0))
-            self.save_btn = ttk.Button(r3, text="Save PNG…", command=self.save)
-            self.save_btn.pack(side="left")
-            self.all_btn = ttk.Button(r3, text="Save every track…",
-                                      command=self.save_all)
-            self.all_btn.pack(side="left", padx=6)
-            self.status = ttk.Label(r3, text="", anchor="e")
+            # ---- sector splits, from the track's own check lines -------
+            sp = ttk.LabelFrame(tab_replay, text="Splits", padding=6)
+            sp.pack(fill="both", expand=True, pady=(8, 0))
+            self.splits_note = ttk.Label(sp, text="Load a replay to see "
+                                                   "sector splits.", anchor="w")
+            self.splits_note.pack(fill="x")
+            st_box = ttk.Frame(sp)
+            st_box.pack(fill="both", expand=True, pady=(4, 4))
+            self.splits_tree = ttk.Treeview(st_box, show="headings", height=5)
+            st_sb = ttk.Scrollbar(st_box, orient="vertical",
+                                  command=self.splits_tree.yview)
+            self.splits_tree.configure(yscrollcommand=st_sb.set)
+            self.splits_tree.pack(side="left", fill="both", expand=True)
+            st_sb.pack(side="right", fill="y")
+
+            sp_btn = ttk.Frame(sp); sp_btn.pack(fill="x")
+            ttk.Button(sp_btn, text="Export telemetry CSV…",
+                       command=self.export_telemetry_csv).pack(side="left")
+            ttk.Button(sp_btn, text="Export splits CSV…",
+                       command=self.export_splits_csv).pack(side="left", padx=6)
+
+            # ---- status bar: outside the notebook, always visible ------
+            statusbar = ttk.Frame(right); statusbar.pack(fill="x", pady=(6, 0))
+            self.status = ttk.Label(statusbar, text="", anchor="e")
             self.status.pack(side="right", fill="x", expand=True)
+
+            # keyboard control for playback; guarded so typing in a text field
+            # (the track search box, the rotate spinbox) is never hijacked.
+            # Binding on root alone isn't enough: Button, Checkbutton, Scale,
+            # Treeview and Listbox all have their own default bindings for
+            # space/arrows (activate, nudge, navigate), which take priority
+            # over a toplevel binding and swallow the keypress before it ever
+            # reaches root - so pressing space while focus happens to be on,
+            # say, the scrub slider you just dragged does nothing.  Bound
+            # directly on every such widget too, returning "break" so the
+            # widget's own action doesn't also fire alongside ours.
+            self.bind_playback_keys(root)
+            self.harden_playback_keys(root)
 
             self.refill()
             self._poll()
@@ -1714,6 +2197,23 @@ def run_gui(extra_dirs: list[str]) -> int:
         def rotate_apply(self):
             self.rot_job = None
             self.preview()
+
+        def lock_rotation(self):
+            """
+            Pin rotation to 0 and stop it being changed, the moment a replay
+            is loaded.  Rotate is the one control that can make what's on
+            screen stop matching the real in-game minimap orientation - fine
+            for a plain map you're turning into a diagram, not fine for a
+            replay, which is only useful if it's trustworthy against what
+            actually happened in the race.  There's no "close replay" action
+            in this app, so once a replay is loaded the lock just stays on
+            for the rest of the session.
+            """
+            self.rotate.set("0")
+            self.rotate_spin.configure(state="disabled")
+            self.rotate_lock_note.configure(
+                text="(locked to match the in-game minimap while a replay "
+                     "is loaded)")
 
         def filters_changed(self):
             self.refill()
@@ -1784,10 +2284,19 @@ def run_gui(extra_dirs: list[str]) -> int:
             ident = self.selected()
             if not ident or self.busy:
                 return
+            # matches the currently viewed replay's karts (both, if comparing)
+            # so the canvas grows for a shortcut the same way the CLI does
+            extra_karts = []
+            if self.replay and self.replay.track == ident:
+                extra_karts += self.replay.karts
+                if self.replay_b and self.replay_b.track == ident:
+                    extra_karts += self.replay_b.karts
+
             # cheap settings: the preview only has to look right, not be final
             try:
                 img, fr, g, ti = build(self.tracks[ident],
-                                       self.args(size=PREVIEW, ss=2))
+                                       self.args(size=PREVIEW, ss=2),
+                                       extra_karts=extra_karts)
             except SystemExit as exc:
                 self.info.configure(text=f"{ident}: {exc}")
                 self.canvas.delete("all")
@@ -1930,6 +2439,7 @@ def run_gui(extra_dirs: list[str]) -> int:
             self.replay_b = None          # a new run A invalidates the compare
             self.rp_t = 0.0
             self.rp_playing = False
+            self.lock_rotation()
             self.rp_play_btn.configure(text="▶", state="normal")
             self.rp_back.configure(state="normal")
             self.rp_scale.configure(state="normal")
@@ -1961,6 +2471,179 @@ def run_gui(extra_dirs: list[str]) -> int:
                 self.listbox.see(i)
             self.preview()               # redraws, then calls rp_draw_static
             self.rp_update()
+            self.refresh_splits()
+
+        def refresh_splits(self):
+            """
+            Sector splits for the loaded replay's primary kart, from the
+            track's own check lines.  Shows a note instead of a table when
+            there's nothing loaded or the track has none to split by.
+            """
+            self.splits_tree.delete(*self.splits_tree.get_children())
+            self.splits_checks = []
+            self.splits_data = []
+
+            if not self.replay:
+                self.splits_tree.configure(columns=())
+                self.splits_note.configure(text="Load a replay to see sector "
+                                                 "splits.")
+                return
+
+            track_dir = self.tracks.get(self.replay.track)
+            checks = load_checklines(track_dir) if track_dir else []
+            kart = self.replay.karts[0]
+            splits = compute_splits(kart, checks)
+            self.splits_checks = checks
+            self.splits_data = splits
+
+            if not splits:
+                self.splits_tree.configure(columns=())
+                self.splits_note.configure(
+                    text="This track has no check lines to split by.")
+                return
+
+            n = len(splits[0].sectors)
+            cols = ["lap"] + [f"s{i}" for i in range(n)] + ["total"]
+            self.splits_tree.configure(columns=cols)
+            self.splits_tree.heading("lap", text="Lap")
+            self.splits_tree.column("lap", width=44, anchor="w", stretch=False)
+            for i in range(n):
+                self.splits_tree.heading(f"s{i}", text=f"S{i + 1}")
+                self.splits_tree.column(f"s{i}", width=52, anchor="e",
+                                        stretch=False)
+            self.splits_tree.heading("total", text="Total")
+            self.splits_tree.column("total", width=60, anchor="e",
+                                    stretch=False)
+
+            best: list[float | None] = [None] * n
+            for ls in splits:
+                for i, s in enumerate(ls.sectors):
+                    if s is not None and (best[i] is None or s < best[i]):
+                        best[i] = s
+                cells = [f"{s:.2f}" if s is not None else "—"
+                        for s in ls.sectors]
+                tot = f"{ls.total:.2f}" if ls.total is not None else "—"
+                self.splits_tree.insert("", "end",
+                                        values=[f"Lap {ls.lap + 1}"] + cells + [tot])
+            if len(splits) > 1 and all(b is not None for b in best):
+                self.splits_tree.insert(
+                    "", "end", tags=("best",),
+                    values=["Best"] + [f"{b:.2f}" for b in best] +
+                           [f"{sum(best):.2f}"])
+                self.splits_tree.tag_configure("best", font=("TkDefaultFont",
+                                                              9, "bold"))
+            self.splits_note.configure(text="")
+
+        def export_telemetry_csv(self):
+            if not self.replay:
+                return
+            entries = [(label, kart) for label, kart, _c in self.rp_entries()]
+            default = f"{self.replay.karts[0].name or self.replay.karts[0].ident or self.replay.track}_telemetry.csv"
+            f = filedialog.asksaveasfilename(
+                title="Export replay telemetry", defaultextension=".csv",
+                initialfile=default, filetypes=[("CSV", "*.csv")])
+            if not f:
+                return
+            try:
+                write_replay_csv(f, entries)
+            except OSError as exc:
+                messagebox.showerror("Could not write CSV", str(exc))
+                return
+            self.status.configure(text=f"wrote {os.path.basename(f)}")
+
+        def export_splits_csv(self):
+            if not self.splits_data:
+                messagebox.showinfo(
+                    "No splits",
+                    "There's nothing to export - load a replay on a track "
+                    "that has check lines first.")
+                return
+            default = f"{self.replay.karts[0].name or self.replay.karts[0].ident or self.replay.track}_splits.csv"
+            f = filedialog.asksaveasfilename(
+                title="Export sector splits", defaultextension=".csv",
+                initialfile=default, filetypes=[("CSV", "*.csv")])
+            if not f:
+                return
+            try:
+                write_splits_csv(f, self.splits_data)
+            except OSError as exc:
+                messagebox.showerror("Could not write CSV", str(exc))
+                return
+            self.status.configure(text=f"wrote {os.path.basename(f)}")
+
+        # -- keyboard control for playback ---------------------------------
+        def _typing_target(self, event) -> bool:
+            return isinstance(event.widget, (tk.Entry, ttk.Entry, ttk.Spinbox,
+                                             ttk.Combobox))
+
+        def on_key_space(self, event):
+            if self._typing_target(event):
+                return None
+            self.rp_toggle()
+            return "break"
+
+        def on_key_step(self, event, direction: int):
+            if self._typing_target(event):
+                return None
+            if not self.replay:
+                return "break"
+            if self.rp_playing:
+                self.rp_toggle()      # pause first, so stepping is predictable
+            kart = self.replay.karts[0]
+            i = kart.frame_at(self.rp_t)
+            j = max(0, min(len(kart) - 1, i + direction))
+            self.rp_t = kart.time[j]
+            self.rp_update()
+            return "break"
+
+        def on_key_home(self, event):
+            if self._typing_target(event):
+                return None
+            if not self.replay:
+                return "break"
+            if self.rp_playing:
+                self.rp_toggle()
+            self.rp_restart()
+            return "break"
+
+        def on_key_end(self, event):
+            if self._typing_target(event):
+                return None
+            if not self.replay:
+                return "break"
+            if self.rp_playing:
+                self.rp_toggle()
+            self.rp_t = self.rp_duration()
+            self.rp_update()
+            return "break"
+
+        def bind_playback_keys(self, widget):
+            """One place both the toplevel binding and the per-widget
+            hardening pass call, so the key set can't drift out of sync."""
+            widget.bind("<space>", self.on_key_space)
+            widget.bind("<Left>", lambda e: self.on_key_step(e, -1))
+            widget.bind("<Right>", lambda e: self.on_key_step(e, 1))
+            widget.bind("<Home>", self.on_key_home)
+            widget.bind("<End>", self.on_key_end)
+
+        def harden_playback_keys(self, widget):
+            """
+            Rebind space/arrows/home/end directly on every widget known to
+            have its own default action for them (Button and Checkbutton
+            activate on space; Scale, Treeview and Listbox nudge/navigate on
+            the arrows), so play/pause and frame-stepping work no matter
+            which widget happens to have focus.  Text-entry widgets are
+            skipped - on_key_* already no-ops for those, and they still need
+            their own arrow-key and space behaviour for editing.
+            """
+            if isinstance(widget, (tk.Entry, ttk.Entry, ttk.Spinbox,
+                                   ttk.Combobox)):
+                return
+            if isinstance(widget, (ttk.Button, ttk.Checkbutton, ttk.Scale,
+                                   ttk.Treeview, tk.Listbox)):
+                self.bind_playback_keys(widget)
+            for child in widget.winfo_children():
+                self.harden_playback_keys(child)
 
         def open_compare(self):
             """Load a second replay alongside the first."""
@@ -2242,15 +2925,6 @@ def run_gui(extra_dirs: list[str]) -> int:
             except ValueError:
                 return None
 
-        def rp_lap_range(self, kart, lap):
-            """Frame range [a, b] for a lap, or the whole run when lap is None."""
-            if lap is None or not kart.lap:
-                return 0, len(kart) - 1
-            idx = [i for i, l in enumerate(kart.lap) if l == lap]
-            if not idx:
-                return 0, len(kart) - 1
-            return idx[0], idx[-1]
-
         def rp_redraw(self):
             self.rp_drawn_lap = None
             self.rp_draw_static()
@@ -2272,7 +2946,7 @@ def run_gui(extra_dirs: list[str]) -> int:
                 pts = self.rp_cache[ki]
                 if len(pts) < 2:
                     continue
-                a, b = self.rp_lap_range(kart, lap)
+                a, b = lap_frame_range(kart, lap)
 
                 def seg(i0, i1, colour, width):
                     i0, i1 = max(i0, a), min(i1, b)
@@ -2320,6 +2994,21 @@ def run_gui(extra_dirs: list[str]) -> int:
                 return float(self.rp_rate.get().rstrip("x"))
             except ValueError:
                 return 1.0
+
+        def rp_arrow(self, x, y, world_heading, r):
+            """
+            A kart-shaped arrow at (x, y) pointing along a *world* heading.
+
+            The heading is turned by the same angle as the map, so the arrow
+            keeps pointing down the track when the view is rotated, and the
+            image's flipped Y is what makes the screen angle negative.
+            """
+            fr = self.frame
+            fx, fz = math.sin(world_heading), math.cos(world_heading)
+            if fr is not None and fr.angle:
+                c, s = math.cos(fr.angle), math.sin(fr.angle)
+                fx, fz = fx * c - fz * s, fx * s + fz * c
+            return arrow_points(x, y, math.atan2(-fz, fx), r)
 
         def rp_head(self, kart, pts, t):
             """
@@ -2404,7 +3093,7 @@ def run_gui(extra_dirs: list[str]) -> int:
                 # each kart is drawn a little smaller than the one before, so
                 # two runs sitting on the same corner still read as two: the
                 # larger rim stays visible around the smaller disc
-                r = max(3.5, 7.0 - 2.0 * ki)
+                r = max(4.5, 8.0 - 2.0 * ki)
                 # nitro sits outside the skid ring so the two never collide
                 if kart.nitro_use[i]:
                     self.canvas.create_oval(x - r - 9, y - r - 9,
@@ -2417,9 +3106,9 @@ def run_gui(extra_dirs: list[str]) -> int:
                                             x + r + 4, y + r + 4,
                                             outline=_SKID_COLOURS[level],
                                             width=3, tags="rpnow")
-                self.canvas.create_oval(x - r, y - r, x + r, y + r,
-                                        fill=colour, outline="#101010",
-                                        width=2, tags="rpnow")
+                self.canvas.create_polygon(
+                    *self.rp_arrow(x, y, kart.heading_at(i, frac), r),
+                    fill=colour, outline="#101010", width=2, tags="rpnow")
 
                 flags = []
                 if kart.nitro_use[i]:
@@ -2634,12 +3323,35 @@ def main(argv=None) -> int:
     ap.add_argument("--full-polys", action="store_true",
                     help="navmesh only: draw faces with >4 vertices in full "
                          "(STK truncates them to the first 4)")
+
+    ap.add_argument("--replay", metavar="FILE",
+                    help="overlay a .replay run's route on the map; the "
+                         "track argument can be omitted, it's read from the "
+                         "replay itself")
+    ap.add_argument("--compare", metavar="FILE",
+                    help="overlay a second .replay alongside --replay")
+    ap.add_argument("--replay-colour", choices=("speed", "nitro", "plain"),
+                    default="speed",
+                    help="how to colour the --replay route (default speed)")
+    ap.add_argument("--replay-lap", default="all", metavar="all|N",
+                    help="'all' or a 1-based lap number to draw (--replay only)")
+    ap.add_argument("--csv", metavar="FILE",
+                    help="write --replay's per-frame telemetry to a CSV file")
+    ap.add_argument("--splits", action="store_true",
+                    help="print --replay's sector splits (needs check lines)")
+    ap.add_argument("--splits-csv", metavar="FILE",
+                    help="write --replay's sector splits to a CSV file")
     ap.add_argument("-q", "--quiet", action="store_true")
     ap.add_argument("--version", action="version",
                     version=f"stk_minimap {__version__}")
 
     args = ap.parse_args(argv)
     tmpdirs: list[str] = []
+
+    if (args.csv or args.splits or args.splits_csv) and not args.replay:
+        ap.error("--csv / --splits / --splits-csv need --replay")
+    if args.compare and not args.replay:
+        ap.error("--compare needs --replay")
 
     if args.install_desktop:
         return install_desktop_entry(args.quiet)
@@ -2685,12 +3397,35 @@ def main(argv=None) -> int:
             return 0
 
         if not args.track:
-            ap.error("give a track (or --list / --all)")
+            if args.replay:
+                # the replay names its own track, so it needn't be typed twice
+                args.track = _read_replay_or_die(args.replay,
+                                                 header_only=True).track
+            else:
+                ap.error("give a track (or --list / --all)")
 
         track_dir = resolve_track(args.track, args.data_dir, tmpdirs)
         img, fr, g, ti = build(track_dir, args)
         out = args.output or f"{ti.ident}_minimap.png"
         img.save(out)
+
+        if args.replay and (args.csv or args.splits or args.splits_csv):
+            rp = _read_replay_or_die(args.replay)
+            kart = rp.karts[0]
+            if args.csv:
+                write_replay_csv(args.csv, [(kart.name or kart.ident or "A", kart)])
+                if not args.quiet:
+                    print(f"  csv        : {args.csv}  ({len(kart)} rows)")
+            if args.splits or args.splits_csv:
+                checks = load_checklines(track_dir)
+                splits = compute_splits(kart, checks)
+                if args.splits:
+                    print()
+                    print(format_splits(splits))
+                if args.splits_csv:
+                    write_splits_csv(args.splits_csv, splits)
+                    if not args.quiet:
+                        print(f"  splits csv : {args.splits_csv}  ({len(splits)} laps)")
 
         if not args.quiet:
             vis = sum(1 for n in g.nodes if not n.invisible)
