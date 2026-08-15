@@ -33,11 +33,12 @@ Examples
 
 from __future__ import annotations
 
-__version__ = "1.1.0"
+__version__ = "1.1.1"
 
 import argparse
 import glob
 import html
+import json
 import math
 import os
 import re
@@ -440,6 +441,43 @@ def read_track_info(directory: str) -> TrackInfo:
             ti.graph_name = mode.get("graph") or ti.graph_name
             break
     return ti
+
+
+# the two left-pane filters, kept here so saved settings can be validated
+# against them - a hand-edited settings file should not be able to leave the
+# track list permanently empty
+FILTER_KINDS = ("All types", "Race", "Arena", "Soccer")
+FILTER_SOURCES = ("All sources", "Built-in", "Add-ons")
+
+
+def settings_path() -> str:
+    if os.name == "nt":
+        base = os.environ.get("APPDATA") or os.path.expanduser("~")
+    elif sys.platform == "darwin":
+        base = os.path.expanduser("~/Library/Application Support")
+    else:
+        base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    return os.path.join(base, "stk-minimap", "settings.json")
+
+
+def load_settings() -> dict:
+    try:
+        with open(settings_path(), "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_settings(data: dict) -> None:
+    """Best effort - a read-only home is no reason to fail a render."""
+    path = settings_path()
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, indent=1)
+    except OSError:
+        pass
 
 
 def track_kind(ti: TrackInfo) -> str:
@@ -1299,6 +1337,7 @@ def run_gui(extra_dirs: list[str]) -> int:
             self.q: queue.Queue = queue.Queue()
             self.tmpdirs: list[str] = []
             self.extra_dirs = list(extra_dirs)
+            self.settings = load_settings()
             self.tracks = find_tracks(self.extra_dirs)
             self.meta: dict[str, dict] = {}
             self.scan_tracks()
@@ -1330,23 +1369,31 @@ def run_gui(extra_dirs: list[str]) -> int:
             ent.insert(0, "")
             self.filter.trace_add("write", lambda *_: self.refill())
 
-            f1 = ttk.Frame(left); f1.pack(fill="x", pady=(4, 0))
-            self.f_kind = tk.StringVar(value="All types")
-            ttk.Combobox(f1, textvariable=self.f_kind, state="readonly", width=11,
-                         values=("All types", "Race", "Arena",
-                                 "Soccer")).pack(side="left", fill="x", expand=True)
-            self.f_src = tk.StringVar(value="All sources")
-            ttk.Combobox(f1, textvariable=self.f_src, state="readonly", width=11,
-                         values=("All sources", "Built-in",
-                                 "Add-ons")).pack(side="left", fill="x",
-                                                  expand=True, padx=(4, 0))
-            self.f_kind.trace_add("write", lambda *_: self.refill())
-            self.f_src.trace_add("write", lambda *_: self.refill())
+            # remembered from last time; anything unrecognised falls back, so a
+            # stale or edited settings file can't hide every track
+            saved = self.settings
+            kind = saved.get("filter_kind")
+            src = saved.get("filter_source")
 
-            self.f_names = tk.BooleanVar(value=False)
+            f1 = ttk.Frame(left); f1.pack(fill="x", pady=(4, 0))
+            self.f_kind = tk.StringVar(
+                value=kind if kind in FILTER_KINDS else FILTER_KINDS[0])
+            ttk.Combobox(f1, textvariable=self.f_kind, state="readonly", width=11,
+                         values=FILTER_KINDS).pack(side="left", fill="x",
+                                                   expand=True)
+            self.f_src = tk.StringVar(
+                value=src if src in FILTER_SOURCES else FILTER_SOURCES[0])
+            ttk.Combobox(f1, textvariable=self.f_src, state="readonly", width=11,
+                         values=FILTER_SOURCES).pack(side="left", fill="x",
+                                                     expand=True, padx=(4, 0))
+            self.f_kind.trace_add("write", lambda *_: self.filters_changed())
+            self.f_src.trace_add("write", lambda *_: self.filters_changed())
+
+            self.f_names = tk.BooleanVar(value=bool(saved.get("show_names")))
             ttk.Checkbutton(left, text="Show in-game names",
                             variable=self.f_names,
-                            command=self.refill).pack(anchor="w", pady=(3, 0))
+                            command=self.filters_changed).pack(anchor="w",
+                                                               pady=(3, 0))
 
             box = ttk.Frame(left)
             box.pack(fill="both", expand=True, pady=(4, 4))
@@ -1515,6 +1562,13 @@ def run_gui(extra_dirs: list[str]) -> int:
                                         kind=track_kind(ti),
                                         addon=track_is_addon(path),
                                         renderable=track_renderable(ti))
+
+        def filters_changed(self):
+            self.refill()
+            self.settings.update(filter_kind=self.f_kind.get(),
+                                 filter_source=self.f_src.get(),
+                                 show_names=bool(self.f_names.get()))
+            save_settings(self.settings)
 
         def refill(self):
             f = self.filter.get().strip().lower()

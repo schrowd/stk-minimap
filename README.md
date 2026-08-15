@@ -93,6 +93,11 @@ Filter it by **type** (race, arena, soccer) and by **source** (built-in or
 add-ons), tick **Show in-game names** to list them as *Antediluvian Abyss*
 rather than `abyss`, and search either form. Cutscenes and grand-prix screens
 are left out — they carry no graph, so there's nothing to draw.
+
+Those three settings are remembered between runs, in
+`%APPDATA%\stk-minimap\settings.json` on Windows or
+`~/.config/stk-minimap/settings.json` elsewhere. Delete that file to start
+fresh; nothing else is stored, and the tool works fine if it can't be written.
 Set the style, output size and quality, tick what you want drawn, then
 **Save PNG…**. **Save every track…** batches the whole list into a folder.
 
@@ -127,6 +132,10 @@ So the fastest legal run of any track is two clicks away: **Browse replays…**,
 
 **Open replay…** takes a `.replay` file from anywhere if you'd rather pick it
 by hand.
+
+<p align="center">
+  <img src="docs/gui_replay.png" width="760" alt="A replay loaded, with the route coloured by speed">
+</p>
 
 Press **▶** to play, drag the slider to scrub or rewind, and pick a rate from
 `0.1x` to `4x` to crawl through a corner in slow motion. The live readout shows
