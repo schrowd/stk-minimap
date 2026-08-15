@@ -1,20 +1,28 @@
 # STK Minimap
 
-Render any SuperTuxKart track's minimap to a PNG — the same image the game
-builds for the corner of your screen, but offline, at any resolution.
+Render any SuperTuxKart track's minimap to a PNG — and play your replays back
+on top of it.
 
 <p align="center">
   <img src="docs/hero_hacienda.png" width="480" alt="Hacienda minimap">
 </p>
 
-SuperTuxKart doesn't ship minimap images. There is no file to extract: the game
-builds the minimap at track load time from the track's AI graph, uploads it to a
-texture, and throws it away when you quit. This script reimplements that path in
-software, so you can get the image without running the game.
+Two things, built on the same piece of machinery.
 
-Useful if you're making route diagrams, split overlays, track guides, or
-anything that needs to draw on top of the in-game minimap — `--style exact`
-reproduces the game's texture exactly, so overlays line up pixel for pixel.
+**Maps.** SuperTuxKart doesn't ship minimap images. There's no file to extract:
+the game builds one at track load from the track's AI graph, uses it, and throws
+it away when you quit. This rebuilds them offline, at any resolution. `--style
+exact` reproduces the game's own texture pixel for pixel, so anything you draw
+on top lines up with what's on screen in game.
+
+**Replays.** Load a `.replay` and watch the run draw itself across that map,
+coloured by speed so the slow sections are obvious, with nitro and skid charge
+marked as they happen. Put two runs side by side and read the gap between them
+at any point on the track. The world records that ship with SuperTuxKart 1.5
+are already in the list, so lining your run up against one takes a few clicks.
+
+Useful for route diagrams, track guides, split overlays, and working out where
+a run is actually losing time.
 
 <p align="center">
   <img src="docs/ex_cornfield.png" width="240" alt="Cornfield Crossing">
@@ -98,6 +106,7 @@ Those three settings are remembered between runs, in
 `%APPDATA%\stk-minimap\settings.json` on Windows or
 `~/.config/stk-minimap/settings.json` elsewhere. Delete that file to start
 fresh; nothing else is stored, and the tool works fine if it can't be written.
+
 Set the style, output size and quality, tick what you want drawn, then
 **Save PNG…**. **Save every track…** batches the whole list into a folder.
 
@@ -108,7 +117,9 @@ from the STK add-ons site.
 Transparent `exact` renders are previewed over a checkerboard, otherwise they'd
 look like an empty box.
 
-### Watching a replay
+---
+
+## Replays
 
 **Browse replays…** lists every replay on your machine in a sortable table —
 your own runs *and* the 21 world records and challenge ghosts that ship with
@@ -127,8 +138,8 @@ filename. Selecting a run shows its description underneath — that's how you
 tell a current world record from a former one. **Load** opens it; double-click
 does the same.
 
-So the (sometimes former) world record run of any track is two clicks away: **Browse replays…**,
-**Show → World record**.
+So the (sometimes former) world record run of any track is two clicks away:
+**Browse replays…**, **Show → World record**.
 
 **Open replay…** takes a `.replay` file from anywhere if you'd rather pick it
 by hand.
@@ -158,7 +169,7 @@ one against another.
 **Items / zippers** adds a yellow ring where a zipper fired and a pink diamond
 where an item was used.
 
-#### Reading the kart marker
+### Reading the kart marker
 
 The marker carries two rings, so you can see what the kart is doing at the
 moment it does it:
@@ -175,7 +186,7 @@ The skid charge comes from the replay's own `skidding_effect` column, which
 steps up as you hold the skid — the same thing that turns the sparks yellow
 then red in game.
 
-#### Comparing two runs
+### Comparing two runs
 
 **Compare with…** opens the browser again to pick the second run, already
 narrowed to the track you're on — only same-track runs can be compared. Both

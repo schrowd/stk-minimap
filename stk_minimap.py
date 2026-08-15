@@ -33,7 +33,7 @@ Examples
 
 from __future__ import annotations
 
-__version__ = "1.1.2"
+__version__ = "1.1.3"
 
 import argparse
 import glob
@@ -633,7 +633,11 @@ def _downscale(img: Image.Image, size: tuple[int, int],
 
     a = np.asarray(img).astype(np.float32)
     a[..., :3] *= a[..., 3:4] / 255.0                       # premultiply
-    a = a.reshape(h, k, w, k, 4).mean(axis=(1, 3))          # box filter
+    # box filter.  Reducing the two block axes one at a time is about twice as
+    # fast as mean(axis=(1, 3)), which strides awkwardly over both at once.
+    # The coverage masks are binary, so the premultiplied values are exact in
+    # float32 and the summation order cannot change the result.
+    a = a.reshape(h, k, w, k, 4).sum(axis=1).sum(axis=2) / (k * k)
     al = a[..., 3:4] / 255.0
     rgb = np.where(al > 0, a[..., :3] / np.maximum(al, 1e-6),
                    np.asarray(bg_rgb, dtype=np.float32))
@@ -1350,7 +1354,6 @@ def run_gui(extra_dirs: list[str]) -> int:
             self.rp_playing = False
             self.rp_last = 0.0           # monotonic clock at the last tick
             self.rp_scrubbing = False
-            self.rp_marks: list = []     # canvas ids for the moving overlay
             self.rp_cache: list = []     # route projected to canvas coords
             self.rp_drawn_lap = None     # which lap the static layer shows
             root.title(f"STK Minimap {__version__}")
@@ -2028,8 +2031,8 @@ def run_gui(extra_dirs: list[str]) -> int:
                        command=pick_file).pack(side="left", padx=6)
             ttk.Button(btns, text="Close",
                        command=win.destroy).pack(side="right")
-            self.rp_count_lbl = ttk.Label(btns, text=f"{len(rows)} replays")
-            self.rp_count_lbl.pack(side="right", padx=10)
+            ttk.Label(btns, text=f"{len(rows)} replays").pack(side="right",
+                                                              padx=10)
             if target == "b":
                 # only same-track runs can be compared, so start there; the
                 # search box still shows it, so it can be cleared or changed
@@ -2103,7 +2106,6 @@ def run_gui(extra_dirs: list[str]) -> int:
         def rp_draw_static(self):
             """The parts that don't move: route, nitro, skids, item uses."""
             self.canvas.delete("rp")
-            self.rp_marks = []
             if not self.rp_on_screen():
                 return
             # cache the projected route: rp_update runs 50x a second and must

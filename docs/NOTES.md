@@ -1,18 +1,33 @@
 # Implementation notes
 
 Background research behind `stk_minimap.py`, kept because most of it can't be
-reconstructed from the code alone. Worth reading before changing anything in the
-loading or framing path: several of the behaviours below are counterintuitive, and
-getting one wrong silently shifts or distorts every image the tool produces.
+reconstructed from the code alone. Worth reading before changing the graph loading,
+the framing, or the replay parsing: several of the behaviours below are
+counterintuitive, and getting one wrong silently shifts or distorts every image the
+tool produces, or mislabels what a run was doing.
 
-Everything here was pulled from `stk-code` master — that, not this document, is the
-source of truth.
+The two halves were established differently, which matters when you go to verify
+something:
+
+- **The minimap half** was read out of `stk-code` master. That, not this document,
+  is the source of truth — see the links at the bottom.
+- **The replay half** was established by measuring real recordings, because the
+  format is barely documented and several fields do not mean what their names
+  suggest. Where a claim here came from measurement, it says so.
 
 ## What the script does
 
-SuperTuxKart does not ship minimap images. It generates them at track load time, in
-`Graph::makeMiniMap` (`src/tracks/graph.cpp` in the `stk-code` repo). The script is a
-software reimplementation of that function and its callees, producing a PNG.
+Two things.
+
+**Minimaps.** SuperTuxKart does not ship minimap images. It generates them at track
+load time, in `Graph::makeMiniMap` (`src/tracks/graph.cpp` in the `stk-code` repo).
+The script is a software reimplementation of that function and its callees,
+producing a PNG.
+
+**Replays.** It also reads STK's `.replay` files and draws a run over that minimap —
+position, speed, nitro, skid charge, item use — including comparing two runs. The
+world records shipped with the game are ordinary replay files, so they load like any
+other. The format is documented under [Replay files](#replay-files) below.
 
 ## How STK actually builds a minimap
 
@@ -79,10 +94,24 @@ Facts that the script depends on — all verified against `stk-code` master:
   127, which breaks the exact-style contract. Pillow's own `Image.reduce` on RGBA also
   drifted (uniform 127 came back as 126), hence the hand-rolled numpy box filter.
   numpy is optional; without it there's a lower-quality Lanczos fallback.
-- **Seam sealing.** The per-quad normal offset above leaves hairline gaps that the
+  The box filter reduces the two block axes one at a time rather than with
+  `mean(axis=(1, 3))` — twice as fast, and provably identical here because the
+  coverage masks are binary, so the premultiplied values are exact in float32 and
+  summation order cannot matter. Verified bit-identical across every style on five
+  tracks; if the masks ever stop being binary, that guarantee goes with it.
+- **No outline on `clean`.** An inward stroke one output pixel wide is thinner than
+  the antialiasing ramp, so it never survives the resolve as its own colour — it
+  just stretches the ramp, which reads as blur rather than definition, and on a
+  thin driveline it eats the whole width. `blueprint` keeps a stroke because its
+  fill is translucent and barely registers without one. Hence per-style
+  `outline_px` defaults rather than one global width.
+- **Seam sealing.** The per-quad normal offset above leaves hairline gaps that an
   outline pass amplifies into visible stripes. Non-exact styles run a morphological
-  close (MaxFilter then MinFilter) on the coverage mask. `exact` never does this and
-  `--no-seal` disables it.
+  close on the coverage mask. `exact` never does this and `--no-seal` disables it.
+  The close and the outline erosion both use a **disk**, not Pillow's square
+  `Min/MaxFilter`: a square structuring element reaches √2 further into a 45°
+  edge than a horizontal one, measured at 44% fatter outlines on the diagonals,
+  which reads as a stroke that wobbles along curves.
 - Track lookup covers Arch (`/usr/share/supertuxkart/data/tracks`), flatpak, snap,
   in-game addon dirs, and `$STK_TRACK_DIR`. Addon `.zip` files are accepted directly.
 
@@ -222,6 +251,13 @@ n-gon truncation path, since no stock 1.5 track exercises every case.
 The GUI was driven end to end under a real Tk main loop: track list, preview,
 `exact`-style preview, save, save-all, the filter box, and replay playback
 (load, scrub, rate, lap follow, skid and nitro rings, two-run comparison).
+
+Two traps if you write more of those. Stubbing out `mainloop` produces failures
+that are artifacts of the stub rather than the code — drive a real main loop and
+script the steps with `after()` instead. And since the track filters now persist,
+anything driving the GUI must run with an isolated `XDG_CONFIG_HOME` (or
+`%APPDATA%`), or a partially-completed run leaves saved filters behind and the
+next one starts from a different list.
 
 Replay parsing was checked against all 108 replays available — 57 local
 recordings plus the 51 that ship with 1.5 — with no failures and no
