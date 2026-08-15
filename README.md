@@ -127,7 +127,7 @@ filename. Selecting a run shows its description underneath — that's how you
 tell a current world record from a former one. **Load** opens it; double-click
 does the same.
 
-So the fastest legal run of any track is two clicks away: **Browse replays…**,
+So the (sometimes former) world record run of any track is two clicks away: **Browse replays…**,
 **Show → World record**.
 
 **Open replay…** takes a `.replay` file from anywhere if you'd rather pick it
