@@ -181,7 +181,16 @@ moment it does it:
 | **Red**, close in | red skid earned |
 | **Cyan**, further out | nitro burning |
 
-They're at different radii, so a red skid while on nitro shows both at once.
+Karts are drawn slightly smaller each, so when two runs are on the same corner —
+or exactly on top of each other, as they are at the start — the larger one's rim
+stays visible around the smaller one and you can still see both.
+
+Positions are interpolated between recorded frames. Replays only store about 15
+frames a second with gaps up to 100ms, so without it the marker would sit still
+and then jump several metres; the game interpolates ghost positions for the same
+reason.
+
+The rings are at different radii, so a red skid while on nitro shows both at once.
 The skid charge comes from the replay's own `skidding_effect` column, which
 steps up as you hold the skid — the same thing that turns the sparks yellow
 then red in game.
@@ -249,6 +258,8 @@ which have no driveline).
 | `--background` | override the background, e.g. `'#101418'` or `none` |
 | `--outline` | outline width in pixels; `0` turns it off (default: none for `clean`, 1 for `blueprint`) |
 | `--title` | draw the track's display name |
+| `--checklines` | draw the track's check lines |
+| `--rotate` | turn the map clockwise by N degrees (breaks `mapPoint2MiniMap`) |
 | `--supersample` | antialiasing factor, default 4 (the game itself uses 2) |
 | `--fit` | crop to the track instead of the game's square view |
 | `--margin` | padding fraction, `--fit` only |
@@ -284,6 +295,51 @@ outline, because its fill is translucent and would barely register without it.
 
 `clean` and `blueprint` are cosmetic and may change between versions. `exact` is
 a contract and won't.
+
+---
+
+## Rotating the map
+
+The game's minimap is always oriented the same way, which isn't always the way
+you want it on a page. **Rotate** in the window turns the map in 15° steps, and
+`--rotate 90` does the same from the command line. Positive angles turn it
+clockwise; any angle works, not just multiples of 90.
+
+Everything rotates together — the track, the check lines and the replay
+overlay — because they all go through the same projection. The image is
+re-framed around the rotated track rather than rotated as a picture, so nothing
+is clipped and there's no resampling blur.
+
+Rotating **breaks `mapPoint2MiniMap` compatibility**, in the same way `--fit`
+does: the pixel mapping is no longer the plain affine transform below, because
+the world point is turned about the track's centre first. Don't rotate a map
+you're going to draw kart positions on with the printed formula.
+
+---
+
+## Check lines
+
+`--checklines`, or tick **Check lines** in the window, draws the check
+structures from the track's `scene.xml` on top of the map:
+
+| Colour | |
+|---|---|
+| **Cyan** | `activate` gates — the checkpoints that must be crossed **in order** |
+| **Red** | `lap` lines — what actually counts a lap |
+
+This is the geometry that decides whether a shortcut counts. A route that skips
+a cyan gate won't validate a lap no matter how fast it is, so seeing where the
+gates actually sit tells you which cuts are legal and which only look legal.
+
+29 of the 44 stock tracks define them; Black Forest has 24, Hacienda 9, and some
+have none at all. They're an annotation rather than part of the game's texture,
+so they're off by default and drawing them takes `--style exact` away from being
+a faithful copy of the in-game image.
+
+Note that lap lines are often very short — Hacienda's are two 2-unit segments at
+the edge of the start line, against gates that span 26 units — so at small sizes
+they can be a couple of pixels. That's the real geometry, not a rendering
+problem.
 
 ---
 

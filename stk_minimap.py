@@ -33,7 +33,7 @@ Examples
 
 from __future__ import annotations
 
-__version__ = "1.1.3"
+__version__ = "1.2.0"
 
 import argparse
 import glob
@@ -480,6 +480,59 @@ def save_settings(data: dict) -> None:
         pass
 
 
+@dataclass
+class CheckLine:
+    """One <check-line> from a track's scene.xml, flattened to the XZ plane."""
+    kind: str                       # "lap" or "activate"
+    p1: tuple[float, float]         # x, z
+    p2: tuple[float, float]
+
+
+def _check_point(s):
+    """
+    Parse a check-line endpoint.
+
+    STK writes these either as "x z" or as "x y z" - CheckLine attempts a 2D
+    read and falls back to a 3D one.  Getting it backwards puts every line in a
+    thin band near z = 0: measured across real tracks, reading three components
+    as (x, y, z) lands 85% of midpoints on the driveline, against 11% for
+    taking the first two.
+    """
+    if not s:
+        return None
+    try:
+        p = [float(v) for v in s.split()]
+    except ValueError:
+        return None
+    if len(p) >= 3:
+        return (p[0], p[2])
+    if len(p) == 2:
+        return (p[0], p[1])
+    return None
+
+
+def load_checklines(directory: str) -> list[CheckLine]:
+    """
+    Check lines live in scene.xml, not in the graph files.
+
+    'lap' lines count a lap; 'activate' lines are the gates that have to be
+    crossed in order, which is what stops a shortcut from counting.
+    """
+    path = os.path.join(directory, "scene.xml")
+    if not os.path.isfile(path):
+        return []
+    try:
+        root = read_xml(path)
+    except SystemExit:
+        return []
+    out = []
+    for el in root.iter("check-line"):
+        p1, p2 = _check_point(el.get("p1")), _check_point(el.get("p2"))
+        if p1 and p2:
+            out.append(CheckLine((el.get("kind") or "").strip(), p1, p2))
+    return out
+
+
 def track_kind(ti: TrackInfo) -> str:
     return "soccer" if ti.is_soccer else ("arena" if ti.is_arena else "race")
 
@@ -520,15 +573,53 @@ class Framing:
     scaling: float        # pixels per world unit
     width: int
     height: int
+    angle: float = 0.0    # radians, applied about (cx, cz) before projecting
+    cx: float = 0.0
+    cz: float = 0.0
+
+    def spin(self, x: float, z: float) -> tuple[float, float]:
+        """Rotate a world point about the pivot. Identity when angle is 0."""
+        if not self.angle:
+            return x, z
+        dx, dz = x - self.cx, z - self.cz
+        c, s = math.cos(self.angle), math.sin(self.angle)
+        return self.cx + dx * c - dz * s, self.cz + dx * s + dz * c
 
     def to_px(self, x: float, z: float) -> tuple[float, float]:
+        # everything that draws goes through here, so rotating here rotates the
+        # track, the check lines and the replay overlay together
+        x, z = self.spin(x, z)
         return ((x - self.origin_x) * self.scaling,
                 self.height - (z - self.origin_z) * self.scaling)
 
 
-def make_framing(g: Graph, size: int, fit: bool, margin: float) -> Framing:
-    dx = g.bb_max[0] - g.bb_min[0]
-    dz = g.bb_max[2] - g.bb_min[2]
+def make_framing(g: Graph, size: int, fit: bool, margin: float,
+                 rotate: float = 0.0) -> Framing:
+    # negated so a positive angle turns the map clockwise on screen, which is
+    # what "rotate right" means everywhere else; +z points up in the image, so
+    # the raw maths would go the other way
+    ang = math.radians(-(rotate or 0.0))
+    cx = (g.bb_min[0] + g.bb_max[0]) / 2.0
+    cz = (g.bb_min[2] + g.bb_max[2]) / 2.0
+
+    if ang:
+        # the rotated track needs its own extent, or it would be clipped; the
+        # corners of the old box are not enough, so measure the real points
+        c, s = math.cos(ang), math.sin(ang)
+        xs, zs = [], []
+        for n in g.nodes:
+            for p in n.p:
+                dx_, dz_ = p[0] - cx, p[2] - cz
+                xs.append(cx + dx_ * c - dz_ * s)
+                zs.append(cz + dx_ * s + dz_ * c)
+        x0, x1 = min(xs), max(xs)
+        z0, z1 = min(zs), max(zs)
+    else:
+        x0, x1 = g.bb_min[0], g.bb_max[0]
+        z0, z1 = g.bb_min[2], g.bb_max[2]
+
+    dx = x1 - x0
+    dz = z1 - z0
 
     if fit:
         # crop to the track instead of STK's square, letterboxed view
@@ -536,14 +627,14 @@ def make_framing(g: Graph, size: int, fit: bool, margin: float) -> Framing:
         pad = span * margin
         w_world, h_world = dx + 2 * pad, dz + 2 * pad
         scaling = size / max(w_world, h_world)
-        return Framing(g.bb_min[0] - pad, g.bb_min[2] - pad, scaling,
+        return Framing(x0 - pad, z0 - pad, scaling,
                        max(1, round(w_world * scaling)),
-                       max(1, round(h_world * scaling)))
+                       max(1, round(h_world * scaling)), ang, cx, cz)
 
     # STK: ortho box is range x range, anchored at bb_min on both axes
     rng = max(dx, dz, 1e-6)
     scaling = size / rng
-    return Framing(g.bb_min[0], g.bb_min[2], scaling, size, size)
+    return Framing(x0, z0, scaling, size, size, ang, cx, cz)
 
 
 # --------------------------------------------------------------------------
@@ -718,13 +809,14 @@ def _morph(img: Image.Image, r: int, erode: bool) -> Image.Image:
 
 def render(g: Graph, fr: Framing, style: str, ss: int, show_invisible: bool,
            invert_x_z: bool, outline_px: float, title: str | None,
-           background: str | None, seal: bool = True) -> Image.Image:
+           background: str | None, seal: bool = True,
+           checklines: list | None = None) -> Image.Image:
     pal = dict(STYLES[style])
     if background:
         pal["bg"] = parse_color(background)
 
     ss_fr = Framing(fr.origin_x, fr.origin_z, fr.scaling * ss,
-                    fr.width * ss, fr.height * ss)
+                    fr.width * ss, fr.height * ss, fr.angle, fr.cx, fr.cz)
     big = (fr.width * ss, fr.height * ss)
 
     visible, hidden = [], []
@@ -766,6 +858,24 @@ def render(g: Graph, fr: Framing, style: str, ss: int, show_invisible: bool,
     lap = lap_line_polygon(g, invert_x_z)
     if lap is not None:
         put(pal.get("lap"), _draw_mask(big, [lap], ss_fr))
+
+    # check lines sit on top of everything: they are an annotation, not part of
+    # the game's texture, and only appear when asked for
+    if checklines:
+        width = max(1, int(round(1.6 * ss)))
+        for kind in ("activate", "lap"):
+            group = [c for c in checklines if (c.kind or "activate") == kind]
+            if not group:
+                continue
+            mask = Image.new("L", big, 0)
+            d = ImageDraw.Draw(mask)
+            for c in group:
+                a, b = c.p1, c.p2
+                if invert_x_z:
+                    a, b = (-a[0], -a[1]), (-b[0], -b[1])
+                d.line([ss_fr.to_px(*a), ss_fr.to_px(*b)], fill=255,
+                       width=width)
+            put(_CHECK_COLOURS.get(kind, _CHECK_COLOURS["activate"]), mask)
 
     out = _downscale(img, (fr.width, fr.height), pal["bg"][:3])
 
@@ -1246,11 +1356,15 @@ def build(track_dir: str, args) -> tuple[Image.Image, Framing, Graph, TrackInfo]
     g = load_graph_for_track(ti, args.reverse, args.full_polys)
     if not g.nodes:
         raise SystemExit(f"{ti.ident}: graph is empty")
-    fr = make_framing(g, args.size, args.fit, args.margin)
+    fr = make_framing(g, args.size, args.fit, args.margin,
+                      getattr(args, "rotate", 0.0) or 0.0)
     title = ti.name if args.title else None
+    checks = load_checklines(track_dir) if getattr(args, "checklines", False) \
+        else None
     img = render(g, fr, args.style, args.supersample, args.show_invisible,
                  args.invert_x_z, args.outline, title, args.background,
-                 seal=not args.no_seal and args.style != "exact")
+                 seal=not args.no_seal and args.style != "exact",
+                 checklines=checks)
     return img, fr, g, ti
 
 
@@ -1263,7 +1377,8 @@ def _gui_args(**over):
     a = argparse.Namespace(reverse=False, full_polys=False, size=512, fit=False,
                            margin=0.02, style="exact", supersample=4,
                            show_invisible=False, invert_x_z=False, outline=None,
-                           title=False, background=None, no_seal=False)
+                           title=False, background=None, no_seal=False,
+                           checklines=False, rotate=0.0)
     for k, v in over.items():
         setattr(a, k, v)
     return a
@@ -1276,6 +1391,8 @@ _KART_COLOURS = ["#ffe066", "#7ce38b", "#ff8fa3", "#8ab4ff",
                  "#d6a2ff", "#7fe3d4"]
 # skid charge: 1 = skidding, 2 = yellow earned, 3 = red earned
 _SKID_COLOURS = {1: "#101010", 2: "#ffd23f", 3: "#ff3b30"}
+# check lines: the gates that must be crossed in order, and the lap line itself
+_CHECK_COLOURS = {"activate": (55, 201, 255, 255), "lap": (255, 59, 48, 255)}
 _SKID_NAMES = {0: "", 1: "skid", 2: "YELLOW SKID", 3: "RED SKID"}
 
 
@@ -1356,6 +1473,7 @@ def run_gui(extra_dirs: list[str]) -> int:
             self.rp_scrubbing = False
             self.rp_cache: list = []     # route projected to canvas coords
             self.rp_drawn_lap = None     # which lap the static layer shows
+            self.rot_job = None          # pending debounced rotation redraw
             root.title(f"STK Minimap {__version__}")
             root.minsize(880, 560)
 
@@ -1437,6 +1555,7 @@ def run_gui(extra_dirs: list[str]) -> int:
             self.size = tk.IntVar(value=512)
             self.ss = tk.IntVar(value=4)
             self.v_title = tk.BooleanVar(value=False)
+            self.v_checks = tk.BooleanVar(value=False)
             self.v_invis = tk.BooleanVar(value=False)
             self.v_rev = tk.BooleanVar(value=False)
             self.v_fit = tk.BooleanVar(value=False)
@@ -1454,10 +1573,20 @@ def run_gui(extra_dirs: list[str]) -> int:
             sz.pack(side="left", padx=(4, 12))
             ttk.Label(r1, text="Quality").pack(side="left")
             ttk.Spinbox(r1, from_=1, to=8, width=4,
-                        textvariable=self.ss).pack(side="left", padx=4)
+                        textvariable=self.ss).pack(side="left", padx=(4, 12))
+            ttk.Label(r1, text="Rotate").pack(side="left")
+            self.rotate = tk.StringVar(value="0")
+            ttk.Spinbox(r1, from_=0, to=345, increment=15, width=5, wrap=True,
+                        textvariable=self.rotate).pack(side="left", padx=(4, 0))
+            # watch the variable rather than the widget: the spinbox's own
+            # command only fires for its arrows, so a typed angle would be
+            # ignored.  Debounced, or every keystroke would trigger a render.
+            self.rotate.trace_add("write", lambda *_: self.rotate_changed())
+            ttk.Label(r1, text="°").pack(side="left")
 
             r2 = ttk.Frame(opt); r2.pack(fill="x", pady=2)
             for text, var in (("Track name", self.v_title),
+                              ("Check lines", self.v_checks),
                               ("Hidden quads", self.v_invis),
                               ("Reverse", self.v_rev),
                               ("Crop to track", self.v_fit),
@@ -1567,6 +1696,25 @@ def run_gui(extra_dirs: list[str]) -> int:
                                         addon=track_is_addon(path),
                                         renderable=track_renderable(ti))
 
+        def rotate_value(self) -> float:
+            """The spinbox is editable, so a typed value may be nonsense."""
+            try:
+                return float(self.rotate.get())
+            except (ValueError, tk.TclError):
+                return 0.0
+
+        def rotate_changed(self):
+            if self.rot_job is not None:
+                try:
+                    self.root.after_cancel(self.rot_job)
+                except tk.TclError:
+                    pass
+            self.rot_job = self.root.after(300, self.rotate_apply)
+
+        def rotate_apply(self):
+            self.rot_job = None
+            self.preview()
+
         def filters_changed(self):
             self.refill()
             self.settings.update(filter_kind=self.f_kind.get(),
@@ -1619,7 +1767,9 @@ def run_gui(extra_dirs: list[str]) -> int:
                              show_invisible=self.v_invis.get(),
                              reverse=self.v_rev.get(),
                              fit=self.v_fit.get(),
-                             full_polys=self.v_full.get())
+                             full_polys=self.v_full.get(),
+                             checklines=self.v_checks.get(),
+                             rotate=self.rotate_value())
 
         def set_busy(self, on, msg=""):
             self.busy = on
@@ -1663,7 +1813,9 @@ def run_gui(extra_dirs: list[str]) -> int:
                      f"{len(g.nodes)} quads ({vis} visible)\n"
                      f"px = (x − {fr.origin_x:.2f}) × {fr.scaling:.4f}     "
                      f"py = {fr.height} − (z − {fr.origin_z:.2f}) "
-                     f"× {fr.scaling:.4f}")
+                     f"× {fr.scaling:.4f}"
+                     + ("   (after rotating about the centre)"
+                        if fr.angle else ""))
 
         def _work(self, fn, done):
             """
@@ -2169,6 +2321,25 @@ def run_gui(extra_dirs: list[str]) -> int:
             except ValueError:
                 return 1.0
 
+        def rp_head(self, kart, pts, t):
+            """
+            Interpolated position, plus the frame it came from and how far past
+            it we are.
+
+            Replays run at about 15fps with gaps up to 100ms, while playback
+            redraws at 50. Without interpolation the marker sits still for
+            several redraws and then jumps - at top speed that is a 4.5 unit
+            hop. The game interpolates ghost positions for exactly this reason.
+            """
+            i = kart.frame_at(t)
+            if i + 1 >= len(pts):
+                return pts[i], i, 0.0
+            t0, t1 = kart.time[i], kart.time[i + 1]
+            f = (t - t0) / (t1 - t0) if t1 > t0 else 0.0
+            f = 0.0 if f < 0.0 else (1.0 if f > 1.0 else f)
+            (x0, y0), (x1, y1) = pts[i], pts[i + 1]
+            return (x0 + (x1 - x0) * f, y0 + (y1 - y0) * f), i, f
+
         def rp_toggle(self):
             if not self.replay:
                 return
@@ -2221,25 +2392,31 @@ def run_gui(extra_dirs: list[str]) -> int:
                 if not len(kart) or ki >= len(self.rp_cache):
                     continue
                 pts = self.rp_cache[ki]
-                i = kart.frame_at(self.rp_t)
-                x, y = pts[i]
+                (x, y), i, frac = self.rp_head(kart, pts, self.rp_t)
 
-                tail = pts[max(0, i - 22):i + 1]
+                # the tail ends at the interpolated head, not the last frame,
+                # or it visibly lags behind the marker
+                tail = pts[max(0, i - 22):i + 1] + [(x, y)]
                 if len(tail) > 1:
                     self.canvas.create_line(*[c for p in tail for c in p],
                                             fill="#ffffff", width=3,
                                             tags="rpnow")
+                # each kart is drawn a little smaller than the one before, so
+                # two runs sitting on the same corner still read as two: the
+                # larger rim stays visible around the smaller disc
+                r = max(3.5, 7.0 - 2.0 * ki)
                 # nitro sits outside the skid ring so the two never collide
                 if kart.nitro_use[i]:
-                    self.canvas.create_oval(x - 15, y - 15, x + 15, y + 15,
+                    self.canvas.create_oval(x - r - 9, y - r - 9,
+                                            x + r + 9, y + r + 9,
                                             outline="#39e0ff", width=3,
                                             tags="rpnow")
                 level = kart.skid_level(i)
                 if level:
-                    self.canvas.create_oval(x - 10, y - 10, x + 10, y + 10,
+                    self.canvas.create_oval(x - r - 4, y - r - 4,
+                                            x + r + 4, y + r + 4,
                                             outline=_SKID_COLOURS[level],
                                             width=3, tags="rpnow")
-                r = 6
                 self.canvas.create_oval(x - r, y - r, x + r, y + r,
                                         fill=colour, outline="#101010",
                                         width=2, tags="rpnow")
@@ -2250,11 +2427,14 @@ def run_gui(extra_dirs: list[str]) -> int:
                 flags.append(_SKID_NAMES[level])
                 if kart.zipper[i]:
                     flags.append("ZIPPER")
-                laps = max(r.laps for r in (self.replay, self.replay_b) if r)
+                laps = max(rp.laps for rp in (self.replay, self.replay_b) if rp)
                 lap = f"lap {kart.lap[i] + 1}/{laps}   " \
                     if kart.lap and laps > 1 else ""
+                speed = kart.speed[i]
+                if i + 1 < len(kart):        # smooth the number too
+                    speed += (kart.speed[i + 1] - speed) * frac
                 lines.append(
-                    f"{label}:  {lap}{kart.speed[i] * 3.6:5.1f} km/h   "
+                    f"{label}:  {lap}{speed * 3.6:5.1f} km/h   "
                     f"nitro {kart.nitro_amount[i]:.0f}   "
                     f"items {kart.item_amount[i]}   "
                     f"{'  '.join(f for f in flags if f)}")
@@ -2426,12 +2606,19 @@ def main(argv=None) -> int:
                     help="outline width in output pixels; 0 turns it off "
                          "(default: none for 'clean', 1 for 'blueprint')")
     ap.add_argument("--title", action="store_true", help="draw the track name")
+    ap.add_argument("--checklines", action="store_true",
+                    help="draw the track's check lines from scene.xml - red "
+                         "for the lap line, cyan for the ordered gates that "
+                         "stop a shortcut counting")
     ap.add_argument("--no-seal", action="store_true",
                     help="don't weld hairline gaps between quads (always off for "
                          "--style exact, which stays pixel-faithful)")
 
     ap.add_argument("--fit", action="store_true",
                     help="crop to the track instead of STK's square letterboxed view "
+                         "(breaks mapPoint2MiniMap compatibility)")
+    ap.add_argument("--rotate", type=float, default=0.0, metavar="DEGREES",
+                    help="turn the map clockwise by this many degrees "
                          "(breaks mapPoint2MiniMap compatibility)")
     ap.add_argument("--margin", type=float, default=0.02,
                     help="padding as a fraction of the track size, --fit only")

@@ -115,6 +115,65 @@ Facts that the script depends on — all verified against `stk-code` master:
 - Track lookup covers Arch (`/usr/share/supertuxkart/data/tracks`), flatpak, snap,
   in-game addon dirs, and `$STK_TRACK_DIR`. Addon `.zip` files are accepted directly.
 
+## Rotation
+
+`--rotate` turns the map by putting the rotation inside `Framing.to_px`, rather
+than rotating the finished image. Two reasons: everything that draws — the graph,
+the check lines, the replay route and markers — goes through that one function, so
+they stay consistent for free; and re-framing around the rotated extent avoids both
+the clipping and the resampling blur you would get from rotating a bitmap.
+
+The framing has to measure the **rotated** points to find the new extent. The
+corners of the unrotated bounding box are not enough: a diagonal track fills a very
+different box once turned, and using the old one clips it.
+
+The angle is negated on the way in, so that a positive angle turns the map
+clockwise on screen. `+z` maps upward in the image, so the unnegated maths turns it
+the other way, which is not what "rotate right" means anywhere else.
+
+At an angle of zero the framing is bit-identical to the unrotated path — the same
+`bb_min` anchoring, so the `exact` contract is unaffected. Rotation does break
+`mapPoint2MiniMap` compatibility, as `--fit` does, and for the same reason: the
+mapping is no longer a plain affine transform of the world point.
+
+## Replay playback
+
+Recorded frames are irregular and sparse: about 15 per second, with gaps ranging
+from 8ms to 100ms. At the 50fps redraw the marker would hold still for several
+frames and then jump — 4.5 world units at top speed. Positions are therefore
+linearly interpolated between the two bracketing frames, and the trail is drawn to
+the interpolated head rather than the last recorded point, or it visibly lags the
+marker. Speed in the readout is interpolated too; the categorical fields (skid
+level, nitro, items) are not, since there is nothing meaningful between two states.
+
+Marker radius shrinks by kart index, and the skid and nitro rings are offset from
+that radius rather than fixed. Two runs of the same track sit exactly on top of
+each other at the start line, and Tk canvas items have no alpha, so without
+differing radii the second kart would completely hide the first.
+
+## Check lines
+
+Check structures live in the track's **`scene.xml`**, not in any of the graph
+files, under a `<checks>` element. Across the 44 stock 1.5 tracks there are only
+two element types: 126 `<check-line>` (101 `kind="activate"`, 25 `kind="lap"`) and
+23 `<check-lap>`. `check-lap` carries no geometry — it is the lap counter, and
+refers to check lines by id — so nothing is drawn for it. No shipped track defines
+`check-goal`, so soccer goal lines are still not available from here.
+
+The endpoint format is the trap. `p1` and `p2` are written **either** as `"x z"`
+**or** as `"x y z"`, matching `CheckLine`'s attempt at a 2D read before falling
+back to 3D. Taking the first two components unconditionally is wrong for the
+3-component form and collapses every line into a thin band near z = 0 — and it
+fails quietly, because those bogus coordinates still land inside most tracks'
+bounding boxes. Testing whether the line's midpoint falls on a painted quad
+separates the two cleanly: reading three components as `(x, y, z)` puts 85% of
+midpoints on the driveline, against 11% for the first-two reading.
+
+Lap lines are frequently much shorter than the gates — Hacienda's are two
+2-unit segments at the edges of the start line, against `activate` gates
+spanning ~26 units — so they can render as only a few pixels. That is the real
+geometry.
+
 ## Replay files
 
 `.replay` files are plain text, written by `ReplayRecorder::save` in
