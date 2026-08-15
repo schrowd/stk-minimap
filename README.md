@@ -89,6 +89,10 @@ it.
 </p>
 
 Pick a track from the list on the left and the preview updates immediately.
+Filter it by **type** (race, arena, soccer) and by **source** (built-in or
+add-ons), tick **Show in-game names** to list them as *Antediluvian Abyss*
+rather than `abyss`, and search either form. Cutscenes and grand-prix screens
+are left out — they carry no graph, so there's nothing to draw.
 Set the style, output size and quality, tick what you want drawn, then
 **Save PNG…**. **Save every track…** batches the whole list into a folder.
 
@@ -98,6 +102,101 @@ from the STK add-ons site.
 
 Transparent `exact` renders are previewed over a checkerboard, otherwise they'd
 look like an empty box.
+
+### Watching a replay
+
+**Browse replays…** lists every replay on your machine in a sortable table —
+your own runs *and* the 21 world records and challenge ghosts that ship with
+SuperTuxKart 1.5. Click any column to sort:
+
+| Column | |
+|---|---|
+| **Track** | in-game name; flags anything whose track isn't installed |
+| **Time** | the run's time, fastest first by default |
+| **Laps**, **Driver** | from the replay header |
+| **Date** | when the run was set, read from STK's filename (the shipped records all share a packaging date, so their file timestamps are useless) |
+| **Source** | World record, Ghost, Challenge, or Yours |
+
+**Show** narrows it to one source, and the search box matches track, driver or
+filename. Selecting a run shows its description underneath — that's how you
+tell a current world record from a former one. **Load** opens it; double-click
+does the same.
+
+So the fastest legal run of any track is two clicks away: **Browse replays…**,
+**Show → World record**.
+
+**Open replay…** takes a `.replay` file from anywhere if you'd rather pick it
+by hand.
+
+Press **▶** to play, drag the slider to scrub or rewind, and pick a rate from
+`0.1x` to `4x` to crawl through a corner in slow motion. The live readout shows
+the lap, speed in km/h, nitro in hand, items held, and which of nitro/skid/
+zipper is active on the current frame.
+
+**Lap** decides how much of the run is drawn. A three-lap run stacked on one
+piece of track is unreadable, so the default is **Follow** — only the lap the
+playhead is in. Pick **All** for the whole run, or a specific lap to compare
+one against another.
+
+**Colour** picks *one* thing to show, rather than layering them:
+
+| Mode | Draws |
+|---|---|
+| **Speed** | blue where you're slow through to red where you're quick — where a run loses time, at a glance |
+| **Nitro & skid** | a dim route, cyan where nitro was burning, yellow and red where a skid was charged |
+| **Plain** | just the line |
+
+**Items / zippers** adds a yellow ring where a zipper fired and a pink diamond
+where an item was used.
+
+#### Reading the kart marker
+
+The marker carries two rings, so you can see what the kart is doing at the
+moment it does it:
+
+| Ring | Meaning |
+|---|---|
+| **Black**, close in | skidding, not yet charged |
+| **Yellow**, close in | yellow skid earned |
+| **Red**, close in | red skid earned |
+| **Cyan**, further out | nitro burning |
+
+They're at different radii, so a red skid while on nitro shows both at once.
+The skid charge comes from the replay's own `skidding_effect` column, which
+steps up as you hold the skid — the same thing that turns the sparks yellow
+then red in game.
+
+#### Comparing two runs
+
+**Compare with…** loads a second replay of the same track and plays both
+together — run **A** and run **B**, each with its own colour, marker and
+readout line.
+
+Underneath them is the gap:
+
+```
+Δ  B behind by 7.03s at this point on track
+```
+
+That's the difference measured **at the same place on the track**, not at the
+same moment in time — the same thing a ghost shows you. Positions at the same
+timestamp only tell you who's further ahead; the time difference at a given
+corner is what tells you where a run was actually won or lost. Scrub through
+and watch the number grow or shrink to find the sections that cost you.
+
+Both runs must be on the same track, or it'll say so rather than compare
+nonsense. Loading a new run into **A** clears the comparison.
+
+The obvious use: load a world record as **A**, then **Browse replays…** →
+**Compare with loaded run** on your own attempt, and scrub through to see
+exactly which corners the record is taking better.
+
+Replays with more than one kart — a run recorded against a ghost — already
+contain two karts, and are drawn the same way.
+
+The map has to match the replay: opening one selects its track for you, and if
+that track isn't installed it'll say so rather than draw the run on the wrong
+map.
 
 ---
 
@@ -222,6 +321,14 @@ Linux
 macOS
 - `/Applications/SuperTuxKart*.app/Contents/Resources/data/tracks`
 - `~/Library/Application Support/SuperTuxKart/addons/tracks`, Steam libraries
+
+Replays are looked for in two places on every platform: the folder STK records
+into (`%APPDATA%\supertuxkart\replay` on Windows,
+`~/.local/share/supertuxkart/replay` on Linux,
+`~/Library/Application Support/SuperTuxKart/replay` on macOS), and the `replay`
+folder that sits next to the `tracks` folder of whichever install was found
+above — which is where the shipped world records live. Pointing the tool at a
+different install with `--data-dir` picks up that install's records too.
 
 If none of that matches your setup, set `STK_TRACK_DIR` or pass `--data-dir`:
 

@@ -3,6 +3,9 @@
 !docs/*.png
 minimaps/
 
+# replays are the user's own runs, not project files
+*.replay
+
 # python
 __pycache__/
 *.py[cod]
