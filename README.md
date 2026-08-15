@@ -126,7 +126,7 @@ which have no driveline).
 | `-s, --size` | output size in pixels, default 512 |
 | `--style` | `exact`, `clean` or `blueprint` |
 | `--background` | override the background, e.g. `'#101418'` or `none` |
-| `--outline` | outline width in pixels (`clean`/`blueprint`) |
+| `--outline` | outline width in pixels; `0` turns it off (default: none for `clean`, 1 for `blueprint`) |
 | `--title` | draw the track's display name |
 | `--supersample` | antialiasing factor, default 4 (the game itself uses 2) |
 | `--fit` | crop to the track instead of the game's square view |
@@ -154,10 +154,12 @@ fully transparent background. On its own it looks blank in most image viewers;
 that's correct, and it's the one to use if you're compositing over the in-game
 minimap. Shown above over grey so you can see it at all.
 
-**`clean`** — light track on a dark background with an outline. What you want
-for a guide, a diagram, or a Discord post.
-
-**`blueprint`** — the same geometry in a schematic blue.
+**`clean`** — light track on a dark background. What you want for a guide, a
+diagram, or a Discord post. Deliberately has no outline: a stroke thinner than
+the antialiasing ramp can't survive the downscale as its own colour, so it just
+softens the edge instead of defining it. Add one with `--outline 2` if you want
+it. **`blueprint`** — the same geometry in a schematic blue; this one keeps its
+outline, because its fill is translucent and would barely register without it.
 
 `clean` and `blueprint` are cosmetic and may change between versions. `exact` is
 a contract and won't.

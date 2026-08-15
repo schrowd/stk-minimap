@@ -33,7 +33,7 @@ Examples
 
 from __future__ import annotations
 
-__version__ = "1.0.1"
+__version__ = "1.0.2"
 
 import argparse
 import glob
@@ -531,15 +531,21 @@ def lap_line_polygon(g: Graph, invert_x_z: bool):
 STYLES = {
     # 'composite' False = later layers overwrite pixels, which is what the GPU
     # does when STK renders the minimap mesh with an opaque material.
+    # outline_px is the default stroke width for the style; --outline overrides.
+    # 'clean' deliberately has none: an inward stroke thinner than the
+    # antialiasing ramp never survives the downscale as its own colour, it just
+    # stretches the ramp - so it reads as a blurred edge rather than an outline,
+    # and on a thin driveline it eats the whole width.  'blueprint' needs one,
+    # because its fill is translucent and would otherwise barely show.
     "exact":  dict(bg=(255, 255, 255, 0),  track=(255, 255, 255, 127),
                    outline=None,             lap=(255, 0, 0, 128), invis=None,
-                   composite=False),
+                   composite=False, outline_px=0.0),
     "clean":  dict(bg=(18, 22, 28, 255),    track=(232, 238, 245, 255),
                    outline=(126, 142, 163, 255), lap=(226, 74, 60, 255),
-                   invis=(70, 78, 90, 255), composite=True),
+                   invis=(70, 78, 90, 255), composite=True, outline_px=0.0),
     "blueprint": dict(bg=(14, 32, 56, 255), track=(120, 190, 255, 70),
                       outline=(150, 210, 255, 255), lap=(255, 196, 84, 255),
-                      invis=(60, 100, 150, 255), composite=True),
+                      invis=(60, 100, 150, 255), composite=True, outline_px=1.0),
 }
 
 
@@ -617,6 +623,40 @@ def find_title_font(px: int):
         return ImageFont.load_default()
 
 
+def _disk_offsets(r: int) -> list[tuple[int, int]]:
+    return [(dx, dy) for dy in range(-r, r + 1) for dx in range(-r, r + 1)
+            if dx * dx + dy * dy <= r * r]
+
+
+def _morph(img: Image.Image, r: int, erode: bool) -> Image.Image:
+    """
+    Erode or dilate with a *disk*.
+
+    Pillow only offers a square Min/MaxFilter, and a square structuring element
+    eats sqrt(2) times further into a 45-degree edge than into a horizontal one.
+    That lands as an outline whose width visibly changes with direction - 44%
+    fatter on the diagonals, measured on a circle - which reads as a wobble
+    along curves.  A disk is isotropic, so the outline keeps one width.
+
+    Falls back to the square filter when numpy is missing.
+    """
+    if r < 1:
+        return img
+    if np is None:
+        f = ImageFilter.MinFilter if erode else ImageFilter.MaxFilter
+        return img.filter(f(2 * r + 1))
+
+    a = np.asarray(img)
+    h, w = a.shape
+    fill = 255 if erode else 0
+    pad = np.pad(a, r, mode="constant", constant_values=fill)
+    out = np.full_like(a, fill)
+    op = np.minimum if erode else np.maximum
+    for dx, dy in _disk_offsets(r):
+        out = op(out, pad[r + dy:r + dy + h, r + dx:r + dx + w])
+    return Image.fromarray(out, "L")
+
+
 def render(g: Graph, fr: Framing, style: str, ss: int, show_invisible: bool,
            invert_x_z: bool, outline_px: float, title: str | None,
            background: str | None, seal: bool = True) -> Image.Image:
@@ -652,14 +692,14 @@ def render(g: Graph, fr: Framing, style: str, ss: int, show_invisible: bool,
         # Quad::getVertices nudges every quad along its own normal, so on sloped
         # ground neighbouring quads can miss each other by a sliver.  A
         # morphological close welds those hairlines shut before we outline.
-        r = 2 * max(1, ss // 2) + 1
-        track_mask = track_mask.filter(ImageFilter.MaxFilter(r)) \
-                               .filter(ImageFilter.MinFilter(r))
+        r = max(1, ss // 2)
+        track_mask = _morph(_morph(track_mask, r, erode=False), r, erode=True)
     put(pal["track"], track_mask)
 
-    if pal.get("outline"):
-        w = max(1, int(round(outline_px * ss)))
-        eroded = track_mask.filter(ImageFilter.MinFilter(2 * w + 1))
+    width_px = pal.get("outline_px", 1.0) if outline_px is None else outline_px
+    if pal.get("outline") and width_px > 0:
+        w = max(1, int(round(width_px * ss)))
+        eroded = _morph(track_mask, w, erode=True)
         edge = Image.composite(track_mask, Image.new("L", big, 0),
                                Image.eval(eroded, lambda v: 255 - v))
         put(pal["outline"], edge)
@@ -762,7 +802,7 @@ def _gui_args(**over):
     """build() takes the argparse namespace, so the GUI fakes one."""
     a = argparse.Namespace(reverse=False, full_polys=False, size=512, fit=False,
                            margin=0.02, style="exact", supersample=4,
-                           show_invisible=False, invert_x_z=False, outline=1.0,
+                           show_invisible=False, invert_x_z=False, outline=None,
                            title=False, background=None, no_seal=False)
     for k, v in over.items():
         setattr(a, k, v)
@@ -1174,8 +1214,9 @@ def main(argv=None) -> int:
                     help="'exact' reproduces the game's texture (white on transparent, "
                          "alpha 127); 'clean' and 'blueprint' are readable presets")
     ap.add_argument("--background", help="override background colour, e.g. '#101418' or 'none'")
-    ap.add_argument("--outline", type=float, default=1.0,
-                    help="outline width in output pixels (clean/blueprint, default 1)")
+    ap.add_argument("--outline", type=float, default=None,
+                    help="outline width in output pixels; 0 turns it off "
+                         "(default: none for 'clean', 1 for 'blueprint')")
     ap.add_argument("--title", action="store_true", help="draw the track name")
     ap.add_argument("--no-seal", action="store_true",
                     help="don't weld hairline gaps between quads (always off for "
