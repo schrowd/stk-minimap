@@ -33,7 +33,7 @@ Examples
 
 from __future__ import annotations
 
-__version__ = "1.1.1"
+__version__ = "1.1.2"
 
 import argparse
 import glob
@@ -1471,9 +1471,10 @@ def run_gui(extra_dirs: list[str]) -> int:
                        command=self.browse_replays).pack(side="left")
             ttk.Button(q1, text="Open replay…",
                        command=self.open_replay).pack(side="left", padx=(4, 0))
-            self.rp_cmp_btn = ttk.Button(q1, text="Compare with…",
-                                         command=self.open_compare,
-                                         state="disabled")
+            self.rp_cmp_btn = ttk.Button(
+                q1, text="Compare with…",
+                command=lambda: self.browse_replays(target="b"),
+                state="disabled")
             self.rp_cmp_btn.pack(side="left", padx=(4, 0))
             self.rp_info = ttk.Label(q1, text="none loaded", anchor="w")
             self.rp_info.pack(side="left", padx=8, fill="x", expand=True)
@@ -1851,11 +1852,17 @@ def run_gui(extra_dirs: list[str]) -> int:
                      f"B {os.path.basename(f)}  ({_mmss(rp.min_time)})")
             self.rp_redraw()
 
-        def browse_replays(self):
+        def browse_replays(self, target="a"):
             """
             A sortable table of every replay on the machine, including the
             world records and challenge ghosts that ship with the game.
+
+            target "a" picks the run to watch; "b" picks one to compare it
+            against, and starts narrowed to the track already loaded - only
+            runs on the same track can be compared.
             """
+            if target == "b" and not self.replay:
+                return
             reps = scan_replays(default_replay_dirs())
             if not reps:
                 messagebox.showinfo(
@@ -1866,7 +1873,7 @@ def run_gui(extra_dirs: list[str]) -> int:
                 return
 
             win = tk.Toplevel(self.root)
-            win.title("Replays")
+            win.title("Compare with…" if target == "b" else "Replays")
             win.minsize(760, 460)
             win.transient(self.root)
 
@@ -1993,22 +2000,41 @@ def run_gui(extra_dirs: list[str]) -> int:
                 win.destroy()
                 self.use_compare(r["path"])
 
-            tree.bind("<Double-1>", load_a)
+            def pick_file():
+                win.destroy()
+                (self.open_compare if target == "b" else self.open_replay)()
+
+            # whichever slot the window was opened for is the double-click
+            tree.bind("<Double-1>", (lambda _e: load_b()) if target == "b"
+                      else load_a)
             q.trace_add("write", repopulate)
             src.trace_add("write", repopulate)
 
             btns = ttk.Frame(win, padding=8)
             btns.pack(fill="x")
-            ttk.Button(btns, text="Load", command=load_a).pack(side="left")
-            cmp_btn = ttk.Button(btns, text="Compare with loaded run",
-                                 command=load_b)
-            cmp_btn.pack(side="left", padx=6)
-            if not self.replay:
-                cmp_btn.configure(state="disabled")
+            if target == "b":
+                ttk.Button(btns, text="Compare",
+                           command=load_b).pack(side="left")
+                ttk.Button(btns, text="Load as the main run instead",
+                           command=load_a).pack(side="left", padx=6)
+            else:
+                ttk.Button(btns, text="Load", command=load_a).pack(side="left")
+                cmp_btn = ttk.Button(btns, text="Compare with loaded run",
+                                     command=load_b)
+                cmp_btn.pack(side="left", padx=6)
+                if not self.replay:
+                    cmp_btn.configure(state="disabled")
+            ttk.Button(btns, text="Pick a file…",
+                       command=pick_file).pack(side="left", padx=6)
             ttk.Button(btns, text="Close",
                        command=win.destroy).pack(side="right")
-            ttk.Label(btns, text=f"{len(rows)} replays").pack(side="right",
-                                                              padx=10)
+            self.rp_count_lbl = ttk.Label(btns, text=f"{len(rows)} replays")
+            self.rp_count_lbl.pack(side="right", padx=10)
+            if target == "b":
+                # only same-track runs can be compared, so start there; the
+                # search box still shows it, so it can be cleared or changed
+                md = self.meta.get(self.replay.track)
+                q.set(md["name"] if md else self.replay.track)
             sort_by("time", toggle=False)
             win.update_idletasks()
 

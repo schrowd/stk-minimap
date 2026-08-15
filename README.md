@@ -177,9 +177,11 @@ then red in game.
 
 #### Comparing two runs
 
-**Compare with…** loads a second replay of the same track and plays both
-together — run **A** and run **B**, each with its own colour, marker and
-readout line.
+**Compare with…** opens the browser again to pick the second run, already
+narrowed to the track you're on — only same-track runs can be compared. Both
+then play together as run **A** and run **B**, each with its own colour, marker
+and readout line. (**Pick a file…** in the browser takes a `.replay` from
+anywhere, for either slot.)
 
 Underneath them is the gap:
 
