@@ -56,27 +56,34 @@ repo root.
 
 ### Linux
 
+Download this repo (**Code → Download ZIP** on GitHub, or `git clone`), then
+from inside that folder:
+
+```bash
+python3 install.py
+```
+
+Interactive: checks Pillow, NumPy and tkinter, offers to `pip install --user`
+whichever are missing, and offers to add **STK Minimap** to your applications
+list / dock. That last part matters on modern GNOME - Files removed the
+ability to run executable text files, so double-clicking a `.py` there just
+opens a text editor, and there's no setting to change that back. Undo the
+launcher entry with `rm ~/.local/share/applications/stk-minimap.desktop`.
+
+Prefer to do it by hand, or skip the prompts:
+
 ```bash
 sudo pacman -S python-pillow python-numpy tk      # Arch / Manjaro
 sudo apt install python3-pil python3-numpy python3-tk python3-pil.imagetk   # Debian / Ubuntu
 sudo dnf install python3-pillow python3-numpy python3-tkinter               # Fedora
 
-python3 -m stk_minimap --gui
+python3 -m stk_minimap --gui              # from inside the repo folder
+python3 -m stk_minimap --install-desktop  # ditto - the launcher above does this for you
 ```
 
-To get a clickable launcher instead of typing that every time:
-
-```bash
-python3 -m stk_minimap --install-desktop
-```
-
-**STK Minimap** then appears in your applications list, searchable and
-pinnable, and opens the window with no terminal involved.
-
-This is the only way to launch it by clicking on modern GNOME: Files removed
-the ability to run executable text files, so double-clicking a `.py` opens it
-in a text editor and there's no setting to change that. Undo it by deleting
-`~/.local/share/applications/stk-minimap.desktop`.
+`-m stk_minimap` only resolves from inside the repo folder (there's nothing
+installed onto `PYTHONPATH`), which is what `install.py`'s desktop entry
+already accounts for - it's fine to launch that one from anywhere.
 
 ### macOS
 

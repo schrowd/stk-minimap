@@ -12,4 +12,4 @@ See docs/NOTES.md for the research behind the reimplementation, and
 docs/SYNCNOTES.md for the SuperTuxKart-sync half in stk_minimap.sync/.
 """
 
-__version__ = "1.4.0"
+__version__ = "1.5.0"
