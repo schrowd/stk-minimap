@@ -33,7 +33,7 @@ Examples
 
 from __future__ import annotations
 
-__version__ = "1.3.0"
+__version__ = "1.4.0"
 
 import argparse
 import csv
@@ -459,6 +459,30 @@ def settings_path() -> str:
     else:
         base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
     return os.path.join(base, "stk-minimap", "settings.json")
+
+
+def stk_minimap_data_dir() -> str:
+    """
+    Where patches/build.sh drops a patched checkout, and where
+    default_patched_stk_binary() looks for the result - same per-platform
+    base directory build.sh uses, so building is all that's needed for the
+    GUI's Launch button to find the binary on its own.
+    """
+    if os.name == "nt":
+        base = os.environ.get("APPDATA") or os.path.expanduser("~")
+    elif sys.platform == "darwin":
+        base = os.path.expanduser("~/Library/Application Support")
+    else:
+        base = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+    return os.path.join(base, "stk-minimap")
+
+
+def default_patched_stk_binary() -> str | None:
+    """The binary patches/build.sh produces at its default --dir, if it's
+    there."""
+    name = "supertuxkart.exe" if os.name == "nt" else "supertuxkart"
+    cand = os.path.join(stk_minimap_data_dir(), "stk-code", "build", "bin", name)
+    return cand if os.path.isfile(cand) else None
 
 
 def load_settings() -> dict:
@@ -1873,10 +1897,122 @@ def run_gui(extra_dirs: list[str]) -> int:
         sys.exit("The GUI needs Pillow's ImageTk module (package python3-pil.imagetk "
                  "on Debian/Ubuntu).")
     import queue
+    import socket
+    import subprocess
     import threading
     import time
 
     PREVIEW = 420
+
+    # A STATE within this many seconds of the local head is treated as
+    # "already agrees" and dropped - the recorded frame interval, per
+    # patches/PROTOCOL.md, so this isn't chasing noise finer than the data.
+    SYNC_DEADBAND = 0.1
+    # A local control wins over an inbound STATE for this long afterwards, so
+    # a message already in flight when the user acts can't immediately
+    # overwrite what they just did.
+    SYNC_LOCAL_HOLDOFF = 0.25
+    SYNC_DEFAULT_PORT = 27982
+
+    class SyncClient:
+        """
+        Background connection to a patched SuperTuxKart's --sync-port
+        listener (patches/PROTOCOL.md).
+
+        Owns a thread that does the actual socket I/O and nothing else -
+        outgoing commands arrive through a Queue fed by the GUI thread,
+        incoming ones are handed to `post`, which the caller wires to the
+        App's existing self.q/_poll() channel.  That channel is the only
+        thing this ever touches from the GUI's side: nothing here calls into
+        Tk directly, which is not safe off the main thread.
+
+        Retries the connection while running, since STK may not be up yet
+        (or may restart) - the protocol is explicit that both sides must
+        tolerate that.
+        """
+        RETRY_SECONDS = 2.0
+
+        def __init__(self, host: str, port: int, post):
+            self.host = host
+            self.port = port
+            self.post = post           # post(kind: str, payload) -> queued
+            self._out: queue.Queue = queue.Queue()
+            self._stop = threading.Event()
+            self._thread = threading.Thread(target=self._run, daemon=True)
+
+        def start(self):
+            self._thread.start()
+
+        def stop(self):
+            self._stop.set()
+            self._out.put(None)        # unstick a thread waiting to send
+
+        def send(self, line: str):
+            self._out.put(line)
+
+        def _run(self):
+            while not self._stop.is_set():
+                try:
+                    self._connect_once()
+                except OSError as exc:
+                    self.post("sync-status", ("error", str(exc)))
+                if self._stop.is_set():
+                    return
+                self.post("sync-status", ("retrying", None))
+                if self._stop.wait(self.RETRY_SECONDS):
+                    return
+
+        def _connect_once(self):
+            self.post("sync-status", ("connecting", None))
+            sock = socket.create_connection((self.host, self.port), timeout=5)
+            try:
+                sock.settimeout(0.2)
+                self.post("sync-status", ("connected", None))
+                buf = b""
+                while not self._stop.is_set():
+                    try:
+                        while True:
+                            line = self._out.get_nowait()
+                            if line is None:
+                                return
+                            sock.sendall((line + "\n").encode("ascii"))
+                    except queue.Empty:
+                        pass
+                    try:
+                        chunk = sock.recv(4096)
+                    except socket.timeout:
+                        continue
+                    if not chunk:
+                        return          # STK closed the connection
+                    buf += chunk
+                    while b"\n" in buf:
+                        raw, buf = buf.split(b"\n", 1)
+                        self._handle(raw.decode("ascii", "replace").strip())
+            finally:
+                sock.close()
+
+        def _handle(self, line: str):
+            # Unknown verbs are ignored, not an error - patches/PROTOCOL.md,
+            # so a mismatched version on either side degrades gracefully.
+            if line.startswith("STATE "):
+                parts = line.split()
+                if len(parts) != 4:
+                    return
+                try:
+                    t, playing, rate = (float(parts[1]), parts[2] == "1",
+                                        float(parts[3]))
+                except ValueError:
+                    return
+                self.post("sync-state", (t, playing, rate))
+            elif line.startswith("REPLAY "):
+                self.post("sync-replay", line[len("REPLAY "):])
+            elif line.startswith("DURATION "):
+                try:
+                    self.post("sync-duration", float(line[len("DURATION "):]))
+                except ValueError:
+                    pass
+            elif line == "BYE":
+                self.post("sync-bye", None)
 
     class App:
         def __init__(self, root):
@@ -1902,6 +2038,10 @@ def run_gui(extra_dirs: list[str]) -> int:
             self.rot_job = None          # pending debounced rotation redraw
             self.splits_checks: list = []    # check lines for the loaded track
             self.splits_data: list = []      # last computed LapSplit list
+            self.sync_client: SyncClient | None = None
+            self.sync_connected = False
+            self._sync_local_until = 0.0     # monotonic deadline, see holdoff
+            self._sync_rate_guard = False    # suppress the rate trace's send
             root.title(f"STK Minimap {__version__}")
             root.minsize(880, 560)
 
@@ -2069,6 +2209,7 @@ def run_gui(extra_dirs: list[str]) -> int:
             ttk.Combobox(q2, textvariable=self.rp_rate, width=5, state="readonly",
                          values=("0.1x", "0.25x", "0.5x", "1x", "2x",
                                  "4x")).pack(side="left")
+            self.rp_rate.trace_add("write", lambda *_: self.sync_rate_changed())
             self.rp_pos = tk.DoubleVar(value=0.0)
             self.rp_scale = ttk.Scale(q2, from_=0.0, to=1.0, variable=self.rp_pos,
                                       command=self.rp_scrub, state="disabled")
@@ -2081,6 +2222,37 @@ def run_gui(extra_dirs: list[str]) -> int:
                      text="Space: play/pause    ←/→: step one frame    "
                           "Home/End: start/end", anchor="w",
                      foreground="#6b7280").pack(fill="x", pady=(3, 0))
+
+            # Live sync with a patched SuperTuxKart (patches/PROTOCOL.md):
+            # pausing, scrubbing or slowing a run in one window does the same
+            # in the other.  Independent of everything else in this tab - the
+            # viewer works exactly as before if this is never touched.
+            ql = ttk.Frame(tab_replay); ql.pack(fill="x", pady=(5, 0))
+            saved_bin = self.settings.get("stk_binary")
+            initial_bin = (saved_bin if saved_bin and os.path.isfile(saved_bin)
+                          else default_patched_stk_binary()) or ""
+            self.stk_binary = tk.StringVar(value=initial_bin)
+            self.stk_launch_btn = ttk.Button(ql, text="Launch SuperTuxKart",
+                                             command=self.sync_launch_stk)
+            self.stk_launch_btn.pack(side="left")
+            ttk.Button(ql, text="…", width=2,
+                      command=self.browse_stk_binary).pack(side="left", padx=(2, 8))
+            self.stk_binary_lbl = ttk.Label(ql, text="", foreground="#6b7280")
+            self.stk_binary_lbl.pack(side="left", fill="x", expand=True)
+            self.update_stk_binary_label()
+
+            qs = ttk.Frame(tab_replay); qs.pack(fill="x", pady=(5, 0))
+            ttk.Label(qs, text="Sync with SuperTuxKart, port").pack(side="left")
+            self.sync_port = tk.StringVar(
+                value=str(self.settings.get("sync_port", SYNC_DEFAULT_PORT)))
+            ttk.Entry(qs, textvariable=self.sync_port,
+                     width=6).pack(side="left", padx=(4, 8))
+            self.sync_btn = ttk.Button(qs, text="Connect",
+                                       command=self.sync_toggle)
+            self.sync_btn.pack(side="left")
+            self.sync_status_lbl = ttk.Label(qs, text="not connected",
+                                             foreground="#6b7280")
+            self.sync_status_lbl.pack(side="left", padx=(8, 0))
 
             # One "colour by" choice rather than four layers that stack: drawing
             # speed, nitro and skids on the same line at once is what made the
@@ -2158,6 +2330,8 @@ def run_gui(extra_dirs: list[str]) -> int:
 
         # -- helpers ------------------------------------------------------
         def quit(self):
+            if self.sync_client:
+                self.sync_client.stop()
             for d in self.tmpdirs:
                 shutil.rmtree(d, ignore_errors=True)
             self.root.destroy()
@@ -2347,6 +2521,18 @@ def run_gui(extra_dirs: list[str]) -> int:
                     kind, payload = self.q.get_nowait()
                     if kind == "status":
                         self.status.configure(text=payload)
+                    elif kind == "sync-status":
+                        self.sync_on_status(*payload)
+                    elif kind == "sync-state":
+                        self.sync_on_state(*payload)
+                    elif kind == "sync-replay":
+                        self.sync_on_replay(payload)
+                    elif kind == "sync-duration":
+                        pass    # informational only: rp_duration() is derived
+                                # from the local file, which parses the same
+                                # data STK's DURATION describes
+                    elif kind == "sync-bye":
+                        self.sync_on_bye()
                     else:
                         fn, res = payload
                         fn(res)
@@ -2420,19 +2606,35 @@ def run_gui(extra_dirs: list[str]) -> int:
             if f:
                 self.use_replay(f)
 
-        def use_replay(self, f):
-            """Load a replay as run A."""
+        def use_replay(self, f, quiet=False):
+            """
+            Load a replay as run A.
+
+            `quiet` routes failures to the status bar instead of a modal
+            dialog, for loads the user didn't ask for directly - following
+            the game's replay over sync shouldn't throw an error box in
+            someone's face for a track they happen not to have.
+            """
+            def failed(title, detail, short):
+                if quiet:
+                    self.status.configure(text=short)
+                else:
+                    messagebox.showerror(title, detail)
+
             try:
                 rp = load_replay(f)
             except (SystemExit, OSError, ValueError) as exc:
-                messagebox.showerror("Could not read replay", str(exc))
+                failed("Could not read replay", str(exc),
+                       f"could not read {os.path.basename(f)}: {exc}")
                 return
             if rp.track not in self.tracks:
-                messagebox.showerror(
+                failed(
                     "Track not found",
                     f"This replay is on “{rp.track}”, which isn't in any of the "
                     f"track folders I know about.\n\nUse “Add folder…” to point "
-                    f"me at it, then open the replay again.")
+                    f"me at it, then open the replay again.",
+                    f"{os.path.basename(f)} is on “{rp.track}”, which isn't "
+                    f"in any track folder I know about")
                 return
 
             self.replay = rp
@@ -2446,7 +2648,7 @@ def run_gui(extra_dirs: list[str]) -> int:
             self.rp_cmp_btn.configure(state="normal")
             who = ", ".join(k.name or k.ident or "?" for k in rp.karts)
             self.rp_info.configure(
-                text=f"{os.path.basename(f)} — {who} on {rp.track}, "
+                text=f"{os.path.basename(f)} - {who} on {rp.track}, "
                      f"{rp.mode}, {rp.laps} lap(s), best {_mmss(rp.min_time)}")
 
             # the lap picker only makes sense once we know the lap count
@@ -2593,6 +2795,7 @@ def run_gui(extra_dirs: list[str]) -> int:
             i = kart.frame_at(self.rp_t)
             j = max(0, min(len(kart) - 1, i + direction))
             self.rp_t = kart.time[j]
+            self.sync_send(f"SEEK {self.rp_t:.3f}")
             self.rp_update()
             return "break"
 
@@ -2614,6 +2817,7 @@ def run_gui(extra_dirs: list[str]) -> int:
             if self.rp_playing:
                 self.rp_toggle()
             self.rp_t = self.rp_duration()
+            self.sync_send(f"SEEK {self.rp_t:.3f}")
             self.rp_update()
             return "break"
 
@@ -2644,6 +2848,224 @@ def run_gui(extra_dirs: list[str]) -> int:
                 self.bind_playback_keys(widget)
             for child in widget.winfo_children():
                 self.harden_playback_keys(child)
+
+        # -- live sync with a patched SuperTuxKart -------------------------
+        # See patches/PROTOCOL.md.  Everything below either sends a command
+        # in response to something the *user* just did, or applies a STATE
+        # that came from the game - never both for the same event, which is
+        # what avoids the feedback loop the protocol document warns about.
+
+        def update_stk_binary_label(self):
+            p = self.stk_binary.get()
+            self.stk_binary_lbl.configure(
+                text=p if p else "not found - run patches/build.sh, or "
+                                 "click Launch to locate it")
+
+        def browse_stk_binary(self):
+            f = filedialog.askopenfilename(
+                title="Locate the patched SuperTuxKart binary",
+                filetypes=[("SuperTuxKart", "supertuxkart.exe" if os.name == "nt"
+                                            else "supertuxkart"),
+                          ("All files", "*")])
+            if not f:
+                return None
+            self.stk_binary.set(f)
+            self.settings["stk_binary"] = f
+            save_settings(self.settings)
+            self.update_stk_binary_label()
+            return f
+
+        def sync_launch_stk(self):
+            """
+            Starts the patched game with --sync-port already set, so the one
+            thing that actually broke this the first time it was tried -
+            launching the game *without* the flag - can't happen from here.
+            """
+            path = self.stk_binary.get()
+            if not path or not os.path.isfile(path):
+                path = self.browse_stk_binary()
+                if not path:
+                    return
+            try:
+                port = int(self.sync_port.get())
+            except ValueError:
+                port = SYNC_DEFAULT_PORT
+            # The game finds its data/ directory by walking up from the
+            # working directory (see FileManager::discoverPaths) - it has to
+            # be launched from the checkout root, exactly like running it by
+            # hand needs `cd` first.  build.sh always builds to
+            # <root>/build/bin/<exe>, so the root is three levels up: past
+            # the binary itself, then "bin", then "build".
+            root_dir = os.path.dirname(os.path.dirname(os.path.dirname(path)))
+            detach = ({"creationflags": subprocess.DETACHED_PROCESS |
+                                        subprocess.CREATE_NEW_PROCESS_GROUP}
+                     if os.name == "nt" else {"start_new_session": True})
+            try:
+                # stdout/stderr must not be PIPE: STK logs enough at startup
+                # to fill the pipe buffer and deadlock before it ever gets to
+                # opening the sync port, with nothing here to drain it.
+                subprocess.Popen([path, f"--sync-port={port}"], cwd=root_dir,
+                                 stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL, **detach)
+            except OSError as exc:
+                messagebox.showerror("Couldn't launch SuperTuxKart", str(exc))
+                return
+            self.status.configure(
+                text=f"launched SuperTuxKart with --sync-port={port}")
+            if not self.sync_client:
+                # SyncClient already retries every 2s, which is exactly what
+                # a game that takes a few seconds to boot needs - no reason
+                # to make the user click Connect separately right after.
+                self.sync_start()
+
+        def sync_toggle(self):
+            if self.sync_client:
+                self.sync_stop()
+            else:
+                self.sync_start()
+
+        def sync_start(self):
+            try:
+                port = int(self.sync_port.get())
+                if not (1 <= port <= 65535):
+                    raise ValueError
+            except ValueError:
+                messagebox.showerror("Sync", "Port must be a number from "
+                                             "1 to 65535.")
+                return
+            self.settings["sync_port"] = port
+            save_settings(self.settings)
+            self.sync_client = SyncClient("127.0.0.1", port, self.sync_post)
+            self.sync_client.start()
+            self.sync_btn.configure(text="Disconnect")
+            self.sync_status_lbl.configure(text="connecting…")
+
+        def sync_stop(self):
+            if self.sync_client:
+                self.sync_client.stop()
+                self.sync_client = None
+            self.sync_connected = False
+            self.sync_btn.configure(text="Connect")
+            self.sync_status_lbl.configure(text="not connected")
+
+        def sync_post(self, kind, payload):
+            """Called from the client's own thread - must never touch Tk.
+            Routes through the same queue _work()'s background jobs use,
+            drained by _poll() on the main thread."""
+            self.q.put((kind, payload))
+
+        def sync_send(self, line: str):
+            """
+            Send a playback command if connected, and mark that a local
+            action just happened either way.
+
+            The holdoff (PROTOCOL.md rule: "a local user action wins for
+            250ms") matters even for the very next STATE that arrives after
+            this: without it, a heartbeat already in flight when the user
+            pressed play could land a moment later and immediately override
+            what they just did.
+            """
+            self._sync_local_until = time.monotonic() + SYNC_LOCAL_HOLDOFF
+            if self.sync_client and self.sync_connected:
+                self.sync_client.send(line)
+
+        def sync_rate_changed(self):
+            if self._sync_rate_guard:
+                return          # this change came from an inbound STATE
+            self.sync_send(f"RATE {self.rp_rate_value()}")
+
+        def sync_on_status(self, kind, detail):
+            if kind == "connecting":
+                self.sync_status_lbl.configure(text="connecting…")
+            elif kind == "connected":
+                self.sync_connected = True
+                self.sync_status_lbl.configure(
+                    text="connected - waiting for a replay")
+            elif kind == "retrying":
+                self.sync_connected = False
+                self.sync_status_lbl.configure(
+                    text="SuperTuxKart not reachable - retrying…")
+            elif kind == "error":
+                self.sync_connected = False
+                self.sync_status_lbl.configure(text=f"connection error: "
+                                                    f"{detail}")
+
+        def sync_on_bye(self):
+            # The socket itself is still open at this point; the client
+            # notices it close on its next read and starts retrying on its
+            # own, so there's nothing to do here beyond reflecting it.
+            self.sync_connected = False
+            self.sync_status_lbl.configure(text="SuperTuxKart closed the "
+                                                "connection")
+
+        def sync_on_replay(self, path):
+            """
+            STK told us which replay it's watching, either on connect or
+            because it just loaded one; load the same file locally so there
+            is something to sync against.
+
+            This is what makes "start the game, pick a replay, and the map
+            follows" work with nothing loaded here beforehand - so it has to
+            handle arriving at any time, not just at connect, and has to be
+            quiet about a replay it can't open.
+            """
+            base = os.path.basename(path)
+            self.sync_status_lbl.configure(text=f"connected - {base}")
+            if self.replay and os.path.basename(self.replay.path) == base:
+                return          # already showing it; nothing to do
+            found = self._sync_find_replay(base)
+            if not found:
+                self.status.configure(
+                    text=f"SuperTuxKart is watching {base} - open it here "
+                         f"manually to see it on the map")
+                return
+            self.use_replay(found, quiet=True)
+            if self.replay and os.path.basename(self.replay.path) == base:
+                self.status.configure(text=f"following {base} from "
+                                           f"SuperTuxKart")
+                # use_replay() starts from 0 and paused, so let the next
+                # heartbeat (100 ms at most) move it to wherever the game
+                # actually is.  Deliberately NOT sync_send("PING"): that
+                # would start a local-action holdoff and suppress the very
+                # STATE being asked for.  Clearing the holdoff instead - the
+                # replay just changed underneath us, so nothing the user did
+                # a moment ago is worth defending.
+                self._sync_local_until = 0.0
+
+        def _sync_find_replay(self, base: str) -> str | None:
+            dirs = default_replay_dirs()
+            if self.replay:
+                dirs = [os.path.dirname(self.replay.path)] + dirs
+            for d in dirs:
+                cand = os.path.join(d, base)
+                if os.path.isfile(cand):
+                    return cand
+            return None
+
+        def sync_on_state(self, t: float, playing: bool, rate: float):
+            if not self.sync_connected:
+                self.sync_connected = True
+            if time.monotonic() < self._sync_local_until:
+                return          # rule 3: a local action just happened
+            if not self.replay:
+                return          # nothing loaded yet to move
+            changed = False
+            if abs(t - self.rp_t) > SYNC_DEADBAND:      # rule 2: deadband
+                self.rp_t = max(0.0, min(t, self.rp_duration()))
+                changed = True
+            if playing != self.rp_playing:
+                self.rp_playing = playing
+                self.rp_play_btn.configure(text="⏸" if playing else "▶")
+                if playing:
+                    self.rp_last = time.monotonic()
+                    self.root.after(20, self.rp_tick)
+                changed = True
+            if abs(rate - self.rp_rate_value()) > 1e-6:
+                self._sync_rate_guard = True
+                self.rp_rate.set(f"{rate:g}x")
+                self._sync_rate_guard = False
+            if changed:
+                self.rp_update()
 
         def open_compare(self):
             """Load a second replay alongside the first."""
@@ -2820,7 +3242,7 @@ def run_gui(extra_dirs: list[str]) -> int:
                 if r["info"]:
                     bits.append(r["info"])
                 if not r["known"]:
-                    bits.append("track not installed — can't draw this one")
+                    bits.append("track not installed - can't draw this one")
                 detail.configure(text="\n".join(bits))
             tree.bind("<<TreeviewSelect>>", on_select)
 
@@ -3036,18 +3458,21 @@ def run_gui(extra_dirs: list[str]) -> int:
                 self.rp_t = 0.0
             self.rp_playing = not self.rp_playing
             self.rp_play_btn.configure(text="⏸" if self.rp_playing else "▶")
+            self.sync_send("PLAY" if self.rp_playing else "PAUSE")
             if self.rp_playing:
                 self.rp_last = time.monotonic()
                 self.root.after(20, self.rp_tick)
 
         def rp_restart(self):
             self.rp_t = 0.0
+            self.sync_send("SEEK 0")
             self.rp_update()
 
         def rp_scrub(self, _v):
             if not self.replay or self.rp_scrubbing:
                 return
             self.rp_t = self.rp_pos.get() * self.rp_duration()
+            self.sync_send(f"SEEK {self.rp_t:.3f}")
             self.rp_update(from_scrub=True)
 
         def rp_tick(self):

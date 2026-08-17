@@ -1,0 +1,428 @@
+diff --git a/src/karts/controller/ghost_controller.hpp b/src/karts/controller/ghost_controller.hpp
+index 07c9768..bef1c88 100644
+--- a/src/karts/controller/ghost_controller.hpp
++++ b/src/karts/controller/ghost_controller.hpp
+@@ -88,6 +88,15 @@ public:
+         return m_all_times[index];
+     }
+ 
++    // ------------------------------------------------------------------------
++    /** Time of the last recorded frame, i.e. how far the replay can be
++     *  scrubbed.  Not the same as the ghost's finish time: the recording
++     *  usually carries on past the finish line. */
++    float        getLastTime() const
++    {
++        return m_all_times.empty() ? 0.0f : m_all_times.back();
++    }
++
+     // ------------------------------------------------------------------------
+     /** Return the display name; if not set, use default display name (kart name) */
+     core::stringw getName(bool include_handicap_string = true) const OVERRIDE
+diff --git a/src/main.cpp b/src/main.cpp
+index 5bd1979..701a011 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -268,6 +268,7 @@ extern "C" {
+ #include "race/highscore_manager.hpp"
+ #include "race/history.hpp"
+ #include "race/race_manager.hpp"
++#include "replay/replay_control.hpp"
+ #include "replay/replay_play.hpp"
+ #include "replay/replay_recorder.hpp"
+ #include "states_screens/main_menu_screen.hpp"
+@@ -636,6 +637,7 @@ void cmdLineHelp()
+     "       --demo-laps=n      Number of laps to use in a demo.\n"
+     "       --demo-karts=n     Number of karts to use in a demo.\n"
+     "       --history          Replay history file 'history.dat'.\n"
++    "       --replay-control   Allow watched replays to be paused, scrubbed and slowed.\n"
+     "       --server-config=file Specify the server_config.xml for server hosting, it will create\n"
+     "                            one if not found.\n"
+     "       --network-console  Enable network console.\n"
+@@ -1780,6 +1782,18 @@ int handleCmdLine(bool has_server_config, bool has_parent_process)
+             UserConfigParams::m_no_start_screen = true;
+     }   // --history
+ 
++    if(CommandLine::has("--replay-control"))
++    {
++        // Hands the race clock to ReplayControl while watching a replay, so
++        // playback can be paused, scrubbed and slowed.  Without this flag
++        // nothing in ReplayControl is consulted at all.
++        if (ReplayControl::get())
++        {
++            ReplayControl::get()->setEnabled(true);
++            Log::info("ReplayControl", "Replay playback control enabled.");
++        }
++    }   // --replay-control
++
+     // Demo mode
+     if(CommandLine::has("--demo-mode", &s))
+     {
+@@ -1981,6 +1995,7 @@ void initRest()
+     history                 = new History              ();
+     ReplayPlay::create();
+     ReplayRecorder::create();
++    ReplayControl::create();
+     material_manager        = new MaterialManager      ();
+     track_manager           = new TrackManager         ();
+     kart_properties_manager = new KartPropertiesManager();
+@@ -2762,6 +2777,7 @@ static void cleanSuperTuxKart()
+     if(history)                 delete history;
+     ReplayPlay::destroy();
+     ReplayRecorder::destroy();
++    ReplayControl::destroy();
+     delete ParticleKindManager::get();
+     PlayerManager::destroy();
+     if(unlock_manager)          delete unlock_manager;
+diff --git a/src/modes/world.cpp b/src/modes/world.cpp
+index d61405b..a7a724c 100644
+--- a/src/modes/world.cpp
++++ b/src/modes/world.cpp
+@@ -39,6 +39,7 @@
+ #include "items/projectile_manager.hpp"
+ #include "karts/controller/battle_ai.hpp"
+ #include "karts/ghost_kart.hpp"
++#include "karts/controller/ghost_controller.hpp"
+ #include "karts/controller/end_controller.hpp"
+ #include "karts/controller/local_player_controller.hpp"
+ #include "karts/controller/skidding_ai.hpp"
+@@ -65,6 +66,7 @@
+ #include "race/highscore_manager.hpp"
+ #include "race/history.hpp"
+ #include "race/race_manager.hpp"
++#include "replay/replay_control.hpp"
+ #include "replay/replay_play.hpp"
+ #include "replay/replay_recorder.hpp"
+ #include "scriptengine/script_engine.hpp"
+@@ -405,6 +407,31 @@ void World::reset(bool restart)
+     if(RaceManager::get()->hasGhostKarts())
+         ReplayPlay::get()->reset();
+ 
++    // Don't let a second viewing inherit the paused/scrubbed state of the
++    // first one, and work out how far it can be scrubbed.
++    if (ReplayControl::get() && ReplayControl::get()->isEnabled())
++    {
++        ReplayControl::get()->reset();
++        if (RaceManager::get()->isWatchingReplay())
++        {
++            // The longest ghost decides the length.  Deliberately the last
++            // *recorded* time rather than the ghost's finish time: the
++            // recording carries on past the finish line, and that tail should
++            // still be reachable when scrubbing.
++            double duration = 0.0;
++            for (unsigned int i = 0; i < getNumKarts(); i++)
++            {
++                GhostKart *gk = dynamic_cast<GhostKart*>(getKart(i));
++                if (gk == NULL) continue;
++                GhostController *gc =
++                    dynamic_cast<GhostController*>(gk->getController());
++                if (gc != NULL && gc->getLastTime() > duration)
++                    duration = gc->getLastTime();
++            }
++            ReplayControl::get()->setDuration(duration);
++        }
++    }
++
+     // Remove all (if any) previous game flyables before reset karts, so no
+     // explosion animation will be created
+     ProjectileManager::get()->cleanup();
+diff --git a/src/modes/world_status.cpp b/src/modes/world_status.cpp
+index 711697a..9eed0e0 100644
+--- a/src/modes/world_status.cpp
++++ b/src/modes/world_status.cpp
+@@ -32,6 +32,7 @@
+ #include "network/protocols/client_lobby.hpp"
+ #include "network/rewind_manager.hpp"
+ #include "network/race_event_manager.hpp"
++#include "replay/replay_control.hpp"
+ #include "tracks/track.hpp"
+ #include "utils/profiler.hpp"
+ #include "utils/stk_process.hpp"
+@@ -467,8 +468,23 @@ void WorldStatus::updateTime(int ticks)
+         case CLOCK_CHRONO:
+             if (m_process_type == PT_CHILD || !device->getTimer()->isStopped())
+             {
+-                m_time_ticks++;
+-                m_time  = stk_config->ticks2Time(m_time_ticks);
++                ReplayControl *rc = ReplayControl::get();
++                if (rc && rc->isEnabled() &&
++                    RaceManager::get()->isWatchingReplay())
++                {
++                    // Watching a replay under external control: the playback
++                    // head owns the clock, so pausing or scrubbing moves the
++                    // ghosts, the on-screen timer and everything else that
++                    // reads getTime() together, instead of letting them drift
++                    // apart.  In the default state (playing, rate 1) this
++                    // counts up exactly as the branch below does.
++                    setTime((float)rc->advance(stk_config->ticks2Time(1)));
++                }
++                else
++                {
++                    m_time_ticks++;
++                    m_time  = stk_config->ticks2Time(m_time_ticks);
++                }
+                 m_count_up_ticks++;
+             }
+             break;
+diff --git a/src/replay/replay_control.cpp b/src/replay/replay_control.cpp
+new file mode 100644
+index 0000000..beab9e9
+--- /dev/null
++++ b/src/replay/replay_control.cpp
+@@ -0,0 +1,109 @@
++//
++//  SuperTuxKart - a fun racing game with go-kart
++//  Copyright (C) 2026 SuperTuxKart-Team
++//
++//  This program is free software; you can redistribute it and/or
++//  modify it under the terms of the GNU General Public License
++//  as published by the Free Software Foundation; either version 3
++//  of the License, or (at your option) any later version.
++//
++//  This program is distributed in the hope that it will be useful,
++//  but WITHOUT ANY WARRANTY; without even the implied warranty of
++//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++//  GNU General Public License for more details.
++//
++//  You should have received a copy of the GNU General Public License
++//  along with this program; if not, write to the Free Software
++//  Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
++
++#include "replay/replay_control.hpp"
++
++ReplayControl *ReplayControl::m_replay_control = NULL;
++
++//-----------------------------------------------------------------------------
++ReplayControl::ReplayControl()
++{
++    m_enabled  = false;
++    m_playing  = true;
++    m_rate     = 1.0;
++    m_time     = 0.0;
++    m_duration = 0.0;
++    m_dirty    = false;
++}   // ReplayControl
++
++//-----------------------------------------------------------------------------
++/** Resets to the start, playing at normal speed.  Called when a new replay
++ *  world is set up so a second viewing doesn't inherit the first one's
++ *  paused/scrubbed state.
++ */
++void ReplayControl::reset()
++{
++    std::lock_guard<std::mutex> lock(m_mutex);
++    m_playing  = true;
++    m_rate     = 1.0;
++    m_time     = 0.0;
++    m_duration = 0.0;
++    m_dirty    = true;
++}   // reset
++
++//-----------------------------------------------------------------------------
++/** Advances the playback head.  With the default state (playing, rate 1) this
++ *  counts up exactly as the stock clock does, so switching the feature on
++ *  without touching anything changes nothing.
++ *  \param dt Real time for one tick, in seconds.
++ */
++double ReplayControl::advance(double dt)
++{
++    std::lock_guard<std::mutex> lock(m_mutex);
++    if (m_playing)
++    {
++        m_time += dt * m_rate;
++        if (m_time < 0.0)
++            m_time = 0.0;
++        // Hold at the end rather than running past it: the ghosts have no
++        // more data, and letting the clock run on would make the reported
++        // position drift further and further from anything meaningful.
++        if (m_duration > 0.0 && m_time > m_duration)
++        {
++            m_time   = m_duration;
++            m_playing = false;
++        }
++    }
++    return m_time;
++}   // advance
++
++//-----------------------------------------------------------------------------
++void ReplayControl::seek(double t)
++{
++    std::lock_guard<std::mutex> lock(m_mutex);
++    if (t < 0.0)
++        t = 0.0;
++    if (m_duration > 0.0 && t > m_duration)
++        t = m_duration;
++    m_time  = t;
++    m_dirty = true;
++}   // seek
++
++//-----------------------------------------------------------------------------
++void ReplayControl::setPlaying(bool playing)
++{
++    std::lock_guard<std::mutex> lock(m_mutex);
++    // Starting playback again from the very end would sit there doing
++    // nothing, so treat it as a replay from the top.
++    if (playing && !m_playing && m_duration > 0.0 && m_time >= m_duration)
++        m_time = 0.0;
++    m_playing = playing;
++    m_dirty   = true;
++}   // setPlaying
++
++//-----------------------------------------------------------------------------
++void ReplayControl::setRate(double rate)
++{
++    std::lock_guard<std::mutex> lock(m_mutex);
++    // Guard against a rate of zero (which would look like a pause but leave
++    // the state saying "playing") and against absurd values.
++    if (rate < 0.01) rate = 0.01;
++    if (rate > 16.0) rate = 16.0;
++    m_rate  = rate;
++    m_dirty = true;
++}   // setRate
+diff --git a/src/replay/replay_control.hpp b/src/replay/replay_control.hpp
+new file mode 100644
+index 0000000..ac8a76c
+--- /dev/null
++++ b/src/replay/replay_control.hpp
+@@ -0,0 +1,142 @@
++//
++//  SuperTuxKart - a fun racing game with go-kart
++//  Copyright (C) 2026 SuperTuxKart-Team
++//
++//  This program is free software; you can redistribute it and/or
++//  modify it under the terms of the GNU General Public License
++//  as published by the Free Software Foundation; either version 3
++//  of the License, or (at your option) any later version.
++//
++//  This program is distributed in the hope that it will be useful,
++//  but WITHOUT ANY WARRANTY; without even the implied warranty of
++//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++//  GNU General Public License for more details.
++//
++//  You should have received a copy of the GNU General Public License
++//  along with this program; if not, write to the Free Software
++//  Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
++
++#ifndef HEADER_REPLAY_CONTROL_HPP
++#define HEADER_REPLAY_CONTROL_HPP
++
++#include <atomic>
++#include <mutex>
++
++/**
++  * \brief Playback head for watching a replay: pause, seek and rate.
++  *
++  * Only used when watching a replay (every kart is a GhostKart, so there is
++  * no physics being integrated and a kart's position is a pure function of
++  * the race clock).  This class owns that clock; WorldStatus::updateTime
++  * asks it for the time each tick and publishes the result through
++  * setTime(), so the ghosts, the on-screen timer and everything else that
++  * reads World::getTime() stay on one clock rather than drifting apart.
++  *
++  * Disabled unless explicitly switched on, in which case advance() simply
++  * counts up at rate 1 and the behaviour is the same as the stock clock.
++  *
++  * Commands may arrive from another thread (the sync server), so the mutable
++  * state is behind a mutex; advance() and getTime() are called every tick
++  * from the main thread.
++  *
++  * \ingroup replay
++  */
++class ReplayControl
++{
++private:
++    static ReplayControl *m_replay_control;
++
++    mutable std::mutex m_mutex;
++
++    /** Switched on from the command line; when false nothing here is used. */
++    bool   m_enabled;
++
++    bool   m_playing;
++
++    /** Playback speed, 1.0 is real time. */
++    double m_rate;
++
++    /** The playback head, in seconds. */
++    double m_time;
++
++    /** Length of the loaded replay; 0 when not known, which disables
++     *  clamping at the far end. */
++    double m_duration;
++
++    /** Set when the head is moved, so the sync server can report it
++     *  immediately rather than at the next periodic update. */
++    std::atomic_bool m_dirty;
++
++         ReplayControl();
++        ~ReplayControl() {}
++
++public:
++    static void create()
++    {
++        if (m_replay_control == NULL)
++            m_replay_control = new ReplayControl();
++    }
++    // ------------------------------------------------------------------------
++    static ReplayControl *get()                    { return m_replay_control; }
++    // ------------------------------------------------------------------------
++    static void destroy()
++    {
++        delete m_replay_control;
++        m_replay_control = NULL;
++    }
++    // ------------------------------------------------------------------------
++    /** Advances the head by dt seconds of real time, scaled by the current
++     *  rate and ignored while paused.  Called once per tick from the main
++     *  thread.  Returns the new head. */
++    double advance(double dt);
++    // ------------------------------------------------------------------------
++    /** Moves the head, clamped to the replay.  Safe to call from any
++     *  thread. */
++    void   seek(double t);
++    // ------------------------------------------------------------------------
++    void   setPlaying(bool playing);
++    // ------------------------------------------------------------------------
++    void   setRate(double rate);
++    // ------------------------------------------------------------------------
++    void   reset();
++    // ------------------------------------------------------------------------
++    double getTime() const
++    {
++        std::lock_guard<std::mutex> lock(m_mutex);
++        return m_time;
++    }
++    // ------------------------------------------------------------------------
++    bool   isPlaying() const
++    {
++        std::lock_guard<std::mutex> lock(m_mutex);
++        return m_playing;
++    }
++    // ------------------------------------------------------------------------
++    double getRate() const
++    {
++        std::lock_guard<std::mutex> lock(m_mutex);
++        return m_rate;
++    }
++    // ------------------------------------------------------------------------
++    double getDuration() const
++    {
++        std::lock_guard<std::mutex> lock(m_mutex);
++        return m_duration;
++    }
++    // ------------------------------------------------------------------------
++    void   setDuration(double d)
++    {
++        std::lock_guard<std::mutex> lock(m_mutex);
++        m_duration = d > 0.0 ? d : 0.0;
++    }
++    // ------------------------------------------------------------------------
++    bool   isEnabled() const                            { return m_enabled; }
++    // ------------------------------------------------------------------------
++    void   setEnabled(bool e)                            { m_enabled = e;   }
++    // ------------------------------------------------------------------------
++    /** True if the head moved other than by ordinary playback since the last
++     *  call; clears the flag. */
++    bool   pollDirty()             { return m_dirty.exchange(false); }
++};   // ReplayControl
++
++#endif

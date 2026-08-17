@@ -1,0 +1,46 @@
+diff --git a/src/karts/controller/ghost_controller.cpp b/src/karts/controller/ghost_controller.cpp
+index 0d8c6ad..2234bde 100644
+--- a/src/karts/controller/ghost_controller.cpp
++++ b/src/karts/controller/ghost_controller.cpp
+@@ -38,6 +38,20 @@ void GhostController::reset()
+ void GhostController::update(int ticks)
+ {
+     m_current_time = World::getWorld()->getTime();
++
++    // The world clock can move backwards when a replay is being scrubbed
++    // (see WorldStatus::setTime), so the index has to be able to follow it
++    // in both directions.  During ordinary forward playback this loop never
++    // executes: after the forward search below, m_all_times[m_current_index]
++    // is always <= m_current_time, and the next frame's time is larger
++    // still.  It is deliberately outside the m_current_time != 0 guard, so
++    // that seeking back to the very start of the replay also works.
++    while (m_current_index > 0 &&
++           m_current_time < m_all_times[m_current_index])
++    {
++        m_current_index--;
++    }
++
+     // Find (if necessary) the next index to use
+     if (m_current_time != 0.0f)
+     {
+diff --git a/src/karts/ghost_kart.cpp b/src/karts/ghost_kart.cpp
+index da07d99..71e8d4a 100644
+--- a/src/karts/ghost_kart.cpp
++++ b/src/karts/ghost_kart.cpp
+@@ -139,6 +139,16 @@ void GhostKart::update(int ticks)
+             m_node->setVisible(true);
+         }
+     }
++    else if (!m_node->isVisible())
++    {
++        // Reaching the end of a replay hides the kart above, and when only
++        // watching a replay nothing ever showed it again - harmless while
++        // playback is strictly forward, but scrubbing back from the end has
++        // to bring it back.  The engine sound and the GFX lights are driven
++        // every frame from updateSound()/updateGraphics(), so they recover
++        // on their own; only the node itself is latched.
++        m_node->setVisible(true);
++    }
+ 
+     const float rd         = gc->getReplayDelta();
+     assert(idx < m_all_transform.size());

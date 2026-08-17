@@ -1,0 +1,53 @@
+diff --git a/src/replay/replay_play.cpp b/src/replay/replay_play.cpp
+index f9aed7f..d5a7bef 100644
+--- a/src/replay/replay_play.cpp
++++ b/src/replay/replay_play.cpp
+@@ -382,6 +382,23 @@ void ReplayPlay::loadFile(bool second_replay)
+     {
+         if(fgets(s, 1023, fd)==NULL)  // eof reached
+             break;
++
++        // Skip blank lines.  A replay that ends with a trailing empty line -
++        // wr_candela_city_202598_1_82_3725.replay, shipped with 1.5, is one -
++        // otherwise produces one readKartData() call more than the file has
++        // karts, which used to throw out of m_kart_list and abort the game.
++        bool is_blank = true;
++        for (const char *p = s; *p != '\0'; p++)
++        {
++            if (!isspace((unsigned char)*p))
++            {
++                is_blank = false;
++                break;
++            }
++        }
++        if (is_blank)
++            continue;
++
+         readKartData(fd, s, second_replay);
+     }
+ 
+@@ -407,6 +424,24 @@ void ReplayPlay::readKartData(FILE *fd, char *next_line, bool second_replay)
+                                                              .m_kart_list.size();
+ 
+     ReplayData &rd = m_replay_file_list[replay_index];
++
++    // Guard before indexing: a file describing fewer karts in its header than
++    // it has data blocks for used to throw std::out_of_range from the .at()
++    // below and take the whole game down, because the "size:" line is only
++    // validated further down.  Refusing the extra block leaves the karts that
++    // did load intact.  (kart_num < first_loaded_f_num would wrap, and is
++    // caught by the same comparison.)
++    const unsigned int kart_index = kart_num - first_loaded_f_num;
++    if (kart_index >= rd.m_kart_list.size() ||
++        kart_index >= rd.m_kart_color.size() ||
++        kart_index >= rd.m_name_list.size())
++    {
++        Log::error("Replay", "'%s' has more kart data than the %u kart(s) "
++            "listed in its header - ignoring the rest.",
++            rd.m_filename.c_str(), (unsigned int)rd.m_kart_list.size());
++        return;
++    }
++
+     m_ghost_karts.push_back(std::make_shared<GhostKart>
+         (rd.m_kart_list.at(kart_num-first_loaded_f_num), kart_num, kart_num + 1,
+         rd.m_kart_color.at(kart_num-first_loaded_f_num), rd));

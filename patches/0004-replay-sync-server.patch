@@ -1,0 +1,713 @@
+diff --git a/src/main.cpp b/src/main.cpp
+index 701a011..001d3be 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -271,6 +271,7 @@ extern "C" {
+ #include "replay/replay_control.hpp"
+ #include "replay/replay_play.hpp"
+ #include "replay/replay_recorder.hpp"
++#include "replay/replay_sync_server.hpp"
+ #include "states_screens/main_menu_screen.hpp"
+ #include "states_screens/online/networking_lobby.hpp"
+ #include "states_screens/online/register_screen.hpp"
+@@ -638,6 +639,8 @@ void cmdLineHelp()
+     "       --demo-karts=n     Number of karts to use in a demo.\n"
+     "       --history          Replay history file 'history.dat'.\n"
+     "       --replay-control   Allow watched replays to be paused, scrubbed and slowed.\n"
++    "       --sync-port=n      Let an external viewer drive replay playback over\n"
++    "                          127.0.0.1:n. Implies --replay-control.\n"
+     "       --server-config=file Specify the server_config.xml for server hosting, it will create\n"
+     "                            one if not found.\n"
+     "       --network-console  Enable network console.\n"
+@@ -1794,6 +1797,22 @@ int handleCmdLine(bool has_server_config, bool has_parent_process)
+         }
+     }   // --replay-control
+ 
++    if(CommandLine::has("--sync-port", &n))
++    {
++        // Opens a loopback control channel so an external viewer can drive
++        // and follow replay playback.  Implies --replay-control: a viewer
++        // that can't move the playback head is not much use.
++        if (n <= 0 || n > 65535)
++        {
++            Log::error("ReplaySync", "--sync-port=%d is not a port number.", n);
++        }
++        else if (ReplayControl::get())
++        {
++            ReplayControl::get()->setEnabled(true);
++            ReplaySyncServer::create((uint16_t)n);
++        }
++    }   // --sync-port
++
+     // Demo mode
+     if(CommandLine::has("--demo-mode", &s))
+     {
+@@ -2777,6 +2796,8 @@ static void cleanSuperTuxKart()
+     if(history)                 delete history;
+     ReplayPlay::destroy();
+     ReplayRecorder::destroy();
++    // Before ReplayControl: the server thread reads it every cycle.
++    ReplaySyncServer::destroy();
+     ReplayControl::destroy();
+     delete ParticleKindManager::get();
+     PlayerManager::destroy();
+diff --git a/src/modes/world.cpp b/src/modes/world.cpp
+index a7a724c..fb8dd4d 100644
+--- a/src/modes/world.cpp
++++ b/src/modes/world.cpp
+@@ -429,6 +429,8 @@ void World::reset(bool restart)
+                     duration = gc->getLastTime();
+             }
+             ReplayControl::get()->setDuration(duration);
++            ReplayControl::get()->setReplayName(
++                ReplayPlay::get()->getReplayFilename());
+         }
+     }
+ 
+diff --git a/src/replay/replay_control.cpp b/src/replay/replay_control.cpp
+index beab9e9..a6ff900 100644
+--- a/src/replay/replay_control.cpp
++++ b/src/replay/replay_control.cpp
+@@ -43,6 +43,11 @@ void ReplayControl::reset()
+     m_rate     = 1.0;
+     m_time     = 0.0;
+     m_duration = 0.0;
++    // Cleared, not kept: World::reset() runs for every new world, so holding
++    // on to the old name would report a replay as still loaded after leaving
++    // it for an ordinary race.  When a replay *is* being watched the caller
++    // sets it again immediately after this returns.
++    m_replay_name.clear();
+     m_dirty    = true;
+ }   // reset
+ 
+diff --git a/src/replay/replay_control.hpp b/src/replay/replay_control.hpp
+index ac8a76c..d40ed00 100644
+--- a/src/replay/replay_control.hpp
++++ b/src/replay/replay_control.hpp
+@@ -21,6 +21,7 @@
+ 
+ #include <atomic>
+ #include <mutex>
++#include <string>
+ 
+ /**
+   * \brief Playback head for watching a replay: pause, seek and rate.
+@@ -63,6 +64,9 @@ private:
+      *  clamping at the far end. */
+     double m_duration;
+ 
++    /** File name of the loaded replay, for reporting to a client. */
++    std::string m_replay_name;
++
+     /** Set when the head is moved, so the sync server can report it
+      *  immediately rather than at the next periodic update. */
+     std::atomic_bool m_dirty;
+@@ -130,6 +134,19 @@ public:
+         m_duration = d > 0.0 ? d : 0.0;
+     }
+     // ------------------------------------------------------------------------
++    std::string getReplayName() const
++    {
++        std::lock_guard<std::mutex> lock(m_mutex);
++        return m_replay_name;
++    }
++    // ------------------------------------------------------------------------
++    void   setReplayName(const std::string &name)
++    {
++        std::lock_guard<std::mutex> lock(m_mutex);
++        m_replay_name = name;
++        m_dirty       = true;
++    }
++    // ------------------------------------------------------------------------
+     bool   isEnabled() const                            { return m_enabled; }
+     // ------------------------------------------------------------------------
+     void   setEnabled(bool e)                            { m_enabled = e;   }
+diff --git a/src/replay/replay_sync_server.cpp b/src/replay/replay_sync_server.cpp
+new file mode 100644
+index 0000000..d701cda
+--- /dev/null
++++ b/src/replay/replay_sync_server.cpp
+@@ -0,0 +1,482 @@
++//
++//  SuperTuxKart - a fun racing game with go-kart
++//  Copyright (C) 2026 SuperTuxKart-Team
++//
++//  This program is free software; you can redistribute it and/or
++//  modify it under the terms of the GNU General Public License
++//  as published by the Free Software Foundation; either version 3
++//  of the License, or (at your option) any later version.
++//
++//  This program is distributed in the hope that it will be useful,
++//  but WITHOUT ANY WARRANTY; without even the implied warranty of
++//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++//  GNU General Public License for more details.
++//
++//  You should have received a copy of the GNU General Public License
++//  along with this program; if not, write to the Free Software
++//  Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
++
++#include "replay/replay_sync_server.hpp"
++
++#include "replay/replay_control.hpp"
++#include "utils/constants.hpp"
++#include "utils/log.hpp"
++
++#include <chrono>
++#include <cstdio>
++#include <cstring>
++#include <cstdlib>
++
++#ifdef WIN32
++#  include <winsock2.h>
++#  include <ws2tcpip.h>
++#  define STK_CLOSE_SOCKET  closesocket
++#  define STK_POLL          WSAPoll
++#  define STK_INVALID       ((intptr_t)INVALID_SOCKET)
++   typedef int stk_socklen_t;
++#else
++#  include <arpa/inet.h>
++#  include <errno.h>
++#  include <fcntl.h>
++#  include <netinet/in.h>
++#  include <netinet/tcp.h>
++#  include <poll.h>
++#  include <sys/socket.h>
++#  include <sys/types.h>
++#  include <unistd.h>
++#  define STK_CLOSE_SOCKET  close
++#  define STK_POLL          poll
++#  define STK_INVALID       ((intptr_t)-1)
++   typedef socklen_t stk_socklen_t;
++#endif
++
++/** The protocol revision reported in HELLO. */
++static const int PROTOCOL_VERSION = 1;
++
++/** How often an unchanged state is repeated, in milliseconds.  A change is
++ *  sent immediately; this is only the heartbeat, and is deliberately far
++ *  slower than the frame rate - the client interpolates between updates the
++ *  same way it already does between recorded replay frames. */
++static const int STATE_INTERVAL_MS = 100;
++
++/** More than this many viewers is certainly a mistake. */
++static const size_t MAX_CLIENTS = 4;
++
++ReplaySyncServer *ReplaySyncServer::m_sync_server = NULL;
++
++//-----------------------------------------------------------------------------
++ReplaySyncServer::ReplaySyncServer()
++{
++    m_listen_socket = STK_INVALID;
++    m_stop          = false;
++}   // ReplaySyncServer
++
++//-----------------------------------------------------------------------------
++ReplaySyncServer::~ReplaySyncServer()
++{
++    m_stop = true;
++    if (m_thread.joinable())
++        m_thread.join();
++
++    for (size_t i = 0; i < m_clients.size(); i++)
++        STK_CLOSE_SOCKET((int)m_clients[i].m_socket);
++    m_clients.clear();
++
++    if (m_listen_socket != STK_INVALID)
++        STK_CLOSE_SOCKET((int)m_listen_socket);
++
++#ifdef WIN32
++    WSACleanup();
++#endif
++}   // ~ReplaySyncServer
++
++//-----------------------------------------------------------------------------
++bool ReplaySyncServer::create(uint16_t port)
++{
++    if (m_sync_server != NULL)
++        return true;
++
++#ifdef WIN32
++    // Refcounted, so it is safe even if the network code already started it.
++    WSADATA wsa_data;
++    if (WSAStartup(MAKEWORD(2, 2), &wsa_data) != 0)
++    {
++        Log::error("ReplaySync", "Could not initialise winsock.");
++        return false;
++    }
++#endif
++
++    ReplaySyncServer *server = new ReplaySyncServer();
++
++    intptr_t s = (intptr_t)socket(AF_INET, SOCK_STREAM, 0);
++    if (s == STK_INVALID)
++    {
++        Log::error("ReplaySync", "Could not create a socket.");
++        delete server;
++        return false;
++    }
++
++    int yes = 1;
++    setsockopt((int)s, SOL_SOCKET, SO_REUSEADDR, (const char*)&yes,
++               sizeof(yes));
++
++    struct sockaddr_in addr;
++    memset(&addr, 0, sizeof(addr));
++    addr.sin_family      = AF_INET;
++    addr.sin_port        = htons(port);
++    // Loopback only.  This is a control channel into a running game; it must
++    // not be reachable from anywhere else on the network.
++    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
++
++    if (bind((int)s, (struct sockaddr*)&addr, sizeof(addr)) != 0 ||
++        listen((int)s, (int)MAX_CLIENTS) != 0)
++    {
++        Log::error("ReplaySync", "Could not listen on 127.0.0.1:%d - "
++                                 "continuing without replay sync.", port);
++        STK_CLOSE_SOCKET((int)s);
++        delete server;
++        return false;
++    }
++
++    server->m_listen_socket = s;
++    m_sync_server           = server;
++    server->m_thread        = std::thread(&ReplaySyncServer::run, server);
++
++    Log::info("ReplaySync", "Listening on 127.0.0.1:%d.", port);
++    return true;
++}   // create
++
++//-----------------------------------------------------------------------------
++void ReplaySyncServer::destroy()
++{
++    delete m_sync_server;
++    m_sync_server = NULL;
++}   // destroy
++
++//-----------------------------------------------------------------------------
++/** The whole server lives on this thread; nothing here runs on the game's
++ *  main loop.
++ */
++void ReplaySyncServer::run()
++{
++    auto last_state = std::chrono::steady_clock::now();
++
++    /** Last replay name announced, so a change can be spotted.  Compared
++     *  rather than driven off a flag because that also covers the viewer
++     *  connecting before any replay is loaded, which is the normal order of
++     *  events when the game is launched from the viewer. */
++    std::string last_replay;
++
++    while (!m_stop)
++    {
++        std::vector<struct pollfd> fds;
++        struct pollfd listen_fd;
++        memset(&listen_fd, 0, sizeof(listen_fd));
++        listen_fd.fd     = (int)m_listen_socket;
++        listen_fd.events = POLLIN;
++        fds.push_back(listen_fd);
++
++        for (size_t i = 0; i < m_clients.size(); i++)
++        {
++            struct pollfd c;
++            memset(&c, 0, sizeof(c));
++            c.fd     = (int)m_clients[i].m_socket;
++            c.events = POLLIN;
++            fds.push_back(c);
++        }
++
++        // A short timeout rather than a blocking wait, so the heartbeat still
++        // goes out on an idle connection and m_stop is noticed promptly.
++        int ready = STK_POLL(fds.data(), (unsigned int)fds.size(), 50);
++
++        if (ready > 0)
++        {
++            // Walk clients backwards: a disconnect erases from the vector.
++            for (size_t i = m_clients.size(); i-- > 0; )
++            {
++                short re = fds[i + 1].revents;
++                if (re & (POLLHUP | POLLERR | POLLNVAL))
++                    dropClient(i);
++                else if (re & POLLIN)
++                    readFromClient(i);
++            }
++            if (fds[0].revents & POLLIN)
++                acceptClient();
++        }
++
++        auto now = std::chrono::steady_clock::now();
++        bool due = std::chrono::duration_cast<std::chrono::milliseconds>
++                   (now - last_state).count() >= STATE_INTERVAL_MS;
++        ReplayControl *rc = ReplayControl::get();
++        bool changed = rc != NULL && rc->pollDirty();
++
++        // A replay being loaded (or swapped for another) has to reach an
++        // already-connected viewer, not just one that happens to connect
++        // afterwards - otherwise the viewer never learns what the game is
++        // watching and can't follow it.  The empty check means the brief
++        // moment inside World::reset() when the name has been cleared but
++        // not yet re-set is ignored rather than reported as "no replay".
++        if (rc != NULL && rc->isEnabled())
++        {
++            std::string name = rc->getReplayName();
++            if (!name.empty() && name != last_replay)
++            {
++                last_replay = name;
++                if (!m_clients.empty())
++                    broadcastReplayInfo();
++            }
++        }
++
++        if (!m_clients.empty() && (due || changed))
++        {
++            broadcastState();
++            last_state = now;
++        }
++    }
++
++    for (size_t i = m_clients.size(); i-- > 0; )
++    {
++        send(i, "BYE");
++        dropClient(i);
++    }
++}   // run
++
++//-----------------------------------------------------------------------------
++void ReplaySyncServer::acceptClient()
++{
++    struct sockaddr_in from;
++    stk_socklen_t from_len = sizeof(from);
++    intptr_t s = (intptr_t)accept((int)m_listen_socket,
++                                  (struct sockaddr*)&from, &from_len);
++    if (s == STK_INVALID)
++        return;
++
++    if (m_clients.size() >= MAX_CLIENTS)
++    {
++        STK_CLOSE_SOCKET((int)s);
++        return;
++    }
++
++    // Small messages sent promptly matter more here than packing them.
++    int yes = 1;
++    setsockopt((int)s, IPPROTO_TCP, TCP_NODELAY, (const char*)&yes,
++               sizeof(yes));
++
++    Client c;
++    c.m_socket = s;
++    m_clients.push_back(c);
++    sendGreeting(m_clients.size() - 1);
++    Log::info("ReplaySync", "Viewer connected (%d now).",
++              (int)m_clients.size());
++}   // acceptClient
++
++//-----------------------------------------------------------------------------
++void ReplaySyncServer::dropClient(size_t index)
++{
++    if (index >= m_clients.size())
++        return;
++    STK_CLOSE_SOCKET((int)m_clients[index].m_socket);
++    m_clients.erase(m_clients.begin() + index);
++    Log::info("ReplaySync", "Viewer disconnected (%d left).",
++              (int)m_clients.size());
++}   // dropClient
++
++//-----------------------------------------------------------------------------
++void ReplaySyncServer::readFromClient(size_t index)
++{
++    char buffer[1024];
++#ifdef WIN32
++    int got = recv((int)m_clients[index].m_socket, buffer, sizeof(buffer), 0);
++#else
++    ssize_t got = recv((int)m_clients[index].m_socket, buffer,
++                       sizeof(buffer), 0);
++#endif
++    if (got <= 0)
++    {
++        dropClient(index);
++        return;
++    }
++
++    // Split off every complete line before acting on any of them: handling a
++    // line can send, sending can drop a client, and dropping one shuffles
++    // m_clients - which would leave the reference below dangling.
++    std::vector<std::string> lines;
++    {
++        std::string &buf = m_clients[index].m_in_buffer;
++        buf.append(buffer, got);
++
++        // A read can stop mid-line, and can also carry several lines at once.
++        size_t nl;
++        while ((nl = buf.find('\n')) != std::string::npos)
++        {
++            std::string line = buf.substr(0, nl);
++            buf.erase(0, nl + 1);
++            if (!line.empty() && line[line.size() - 1] == '\r')
++                line.erase(line.size() - 1);
++            lines.push_back(line);
++        }
++
++        // Whatever is sending this isn't speaking the protocol; drop the
++        // backlog rather than letting it grow without bound.
++        if (buf.size() > 8192)
++            buf.clear();
++    }
++
++    const socket_handle sock = m_clients[index].m_socket;
++    for (size_t i = 0; i < lines.size(); i++)
++    {
++        handleLine(lines[i], index);
++        // Stop if that line cost this client its connection.  Comparing the
++        // socket as well as the index covers a drop lower down the vector,
++        // which would silently slide a different client into this slot.
++        if (index >= m_clients.size() || m_clients[index].m_socket != sock)
++            return;
++    }
++}   // readFromClient
++
++//-----------------------------------------------------------------------------
++void ReplaySyncServer::handleLine(const std::string &line, size_t index)
++{
++    ReplayControl *rc = ReplayControl::get();
++    if (rc == NULL)
++        return;
++
++    // Commands are applied straight to ReplayControl, which takes its own
++    // lock; the game thread reads it every tick.  Nothing is queued, so a
++    // command takes effect on the very next tick.
++    if (line == "PLAY")
++    {
++        rc->setPlaying(true);
++    }
++    else if (line == "PAUSE")
++    {
++        rc->setPlaying(false);
++    }
++    else if (line == "PING")
++    {
++        // Answers the asker only; the other viewers didn't ask.
++        sendState(index);
++    }
++    else if (line.compare(0, 5, "SEEK ") == 0)
++    {
++        double t = atof(line.c_str() + 5);
++        rc->seek(t);
++    }
++    else if (line.compare(0, 5, "RATE ") == 0)
++    {
++        double r = atof(line.c_str() + 5);
++        rc->setRate(r);
++    }
++    // Anything else is ignored on purpose, so the viewer can send commands a
++    // future version understands without breaking against an older game.
++}   // handleLine
++
++//-----------------------------------------------------------------------------
++void ReplaySyncServer::send(size_t index, const std::string &line)
++{
++    if (index >= m_clients.size())
++        return;
++    std::string out = line + "\n";
++    size_t sent = 0;
++    while (sent < out.size())
++    {
++#ifdef WIN32
++        int n = ::send((int)m_clients[index].m_socket, out.data() + sent,
++                       (int)(out.size() - sent), 0);
++#else
++        // MSG_NOSIGNAL: a viewer that vanished mid-write must not deliver
++        // SIGPIPE and kill the game.
++        ssize_t n = ::send((int)m_clients[index].m_socket, out.data() + sent,
++                           out.size() - sent, MSG_NOSIGNAL);
++#endif
++        if (n <= 0)
++        {
++            dropClient(index);
++            return;
++        }
++        sent += n;
++    }
++}   // send
++
++//-----------------------------------------------------------------------------
++void ReplaySyncServer::sendGreeting(size_t index)
++{
++    ReplayControl *rc = ReplayControl::get();
++    char line[1024];
++
++    snprintf(line, sizeof(line), "HELLO stk %s %d", STK_VERSION,
++             PROTOCOL_VERSION);
++    send(index, line);
++    if (index >= m_clients.size() || rc == NULL)
++        return;
++
++    std::string name = rc->getReplayName();
++    if (!name.empty())
++    {
++        snprintf(line, sizeof(line), "REPLAY %s", name.c_str());
++        send(index, line);
++        if (index >= m_clients.size())
++            return;
++    }
++
++    snprintf(line, sizeof(line), "DURATION %.3f", rc->getDuration());
++    send(index, line);
++    if (index >= m_clients.size())
++        return;
++
++    sendState(index);
++}   // sendGreeting
++
++//-----------------------------------------------------------------------------
++void ReplaySyncServer::sendState(size_t index)
++{
++    ReplayControl *rc = ReplayControl::get();
++    if (rc == NULL)
++        return;
++
++    char line[256];
++    snprintf(line, sizeof(line), "STATE %.3f %d %.3f", rc->getTime(),
++             rc->isPlaying() ? 1 : 0, rc->getRate());
++    send(index, line);
++}   // sendState
++
++//-----------------------------------------------------------------------------
++void ReplaySyncServer::broadcastState()
++{
++    ReplayControl *rc = ReplayControl::get();
++    if (rc == NULL)
++        return;
++
++    char line[256];
++    snprintf(line, sizeof(line), "STATE %.3f %d %.3f", rc->getTime(),
++             rc->isPlaying() ? 1 : 0, rc->getRate());
++    std::string state(line);
++
++    for (size_t i = m_clients.size(); i-- > 0; )
++        send(i, state);
++}   // broadcastState
++
++//-----------------------------------------------------------------------------
++/** Tells every viewer which replay is now loaded, and how long it is.
++ */
++void ReplaySyncServer::broadcastReplayInfo()
++{
++    ReplayControl *rc = ReplayControl::get();
++    if (rc == NULL)
++        return;
++
++    std::string name = rc->getReplayName();
++    if (name.empty())
++        return;
++
++    // Both lines in one payload: send() appends the final newline, so this
++    // goes out as a single write and a viewer can't be dropped between the
++    // two and end up with a name but no duration.
++    char line[1024];
++    snprintf(line, sizeof(line), "REPLAY %s\nDURATION %.3f", name.c_str(),
++             rc->getDuration());
++    std::string info(line);
++
++    for (size_t i = m_clients.size(); i-- > 0; )
++        send(i, info);
++}   // broadcastReplayInfo
+diff --git a/src/replay/replay_sync_server.hpp b/src/replay/replay_sync_server.hpp
+new file mode 100644
+index 0000000..0a0c59d
+--- /dev/null
++++ b/src/replay/replay_sync_server.hpp
+@@ -0,0 +1,95 @@
++//
++//  SuperTuxKart - a fun racing game with go-kart
++//  Copyright (C) 2026 SuperTuxKart-Team
++//
++//  This program is free software; you can redistribute it and/or
++//  modify it under the terms of the GNU General Public License
++//  as published by the Free Software Foundation; either version 3
++//  of the License, or (at your option) any later version.
++//
++//  This program is distributed in the hope that it will be useful,
++//  but WITHOUT ANY WARRANTY; without even the implied warranty of
++//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++//  GNU General Public License for more details.
++//
++//  You should have received a copy of the GNU General Public License
++//  along with this program; if not, write to the Free Software
++//  Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
++
++#ifndef HEADER_REPLAY_SYNC_SERVER_HPP
++#define HEADER_REPLAY_SYNC_SERVER_HPP
++
++#include <atomic>
++#include <string>
++#include <thread>
++#include <vector>
++
++/**
++  * \brief Lets an external viewer drive replay playback, and follow it.
++  *
++  * A line-based text protocol over a loopback TCP socket.  In:
++  * PLAY / PAUSE / SEEK <s> / RATE <x> / PING.  Out: HELLO, REPLAY, DURATION,
++  * STATE <time> <playing> <rate>, BYE.  Unknown verbs are ignored so either
++  * end can be extended without a version handshake.
++  *
++  * Everything happens on its own thread and talks only to ReplayControl,
++  * which is already thread-safe - the game's main loop is never touched, so
++  * a stalled or vanished client cannot affect the frame rate.
++  *
++  * Only started when --sync-port is given, and only ever binds 127.0.0.1:
++  * this is a control channel into a running game and has no business being
++  * reachable from off the machine.
++  *
++  * \ingroup replay
++  */
++class ReplaySyncServer
++{
++private:
++    static ReplaySyncServer *m_sync_server;
++
++    /** Native socket handle; int everywhere except Windows, where it is
++     *  SOCKET (an unsigned pointer-sized handle).  Kept as intptr_t so the
++     *  header needs no platform includes. */
++    typedef intptr_t socket_handle;
++
++    struct Client
++    {
++        socket_handle m_socket;
++        /** Partial line carried over between reads. */
++        std::string   m_in_buffer;
++    };
++
++    socket_handle          m_listen_socket;
++
++    /** Only touched by the server thread, so no lock is needed. */
++    std::vector<Client>    m_clients;
++
++    std::thread            m_thread;
++    std::atomic_bool       m_stop;
++
++    void run();
++    void acceptClient();
++    void readFromClient(size_t index);
++    void handleLine(const std::string &line, size_t index);
++    void send(size_t index, const std::string &line);
++    void sendState(size_t index);
++    void broadcastState();
++    void broadcastReplayInfo();
++    void sendGreeting(size_t index);
++    void dropClient(size_t index);
++
++         ReplaySyncServer();
++        ~ReplaySyncServer();
++
++public:
++    /** Starts the listener.  Returns false (and logs) if the port can't be
++     *  bound, which must not be fatal - a busy port is a reason to carry on
++     *  without sync, not to refuse to start the game. */
++    static bool create(uint16_t port);
++    // ------------------------------------------------------------------------
++    static ReplaySyncServer *get()                    { return m_sync_server; }
++    // ------------------------------------------------------------------------
++    static void destroy();
++};   // ReplaySyncServer
++
++#endif

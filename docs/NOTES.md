@@ -10,7 +10,7 @@ The two halves were established differently, which matters when you go to verify
 something:
 
 - **The minimap half** was read out of `stk-code` master. That, not this document,
-  is the source of truth — see the links at the bottom.
+  is the source of truth - see the links at the bottom.
 - **The replay half** was established by measuring real recordings, because the
   format is barely documented and several fields do not mean what their names
   suggest. Where a claim here came from measurement, it says so.
@@ -24,8 +24,8 @@ load time, in `Graph::makeMiniMap` (`src/tracks/graph.cpp` in the `stk-code` rep
 The script is a software reimplementation of that function and its callees,
 producing a PNG.
 
-**Replays.** It also reads STK's `.replay` files and draws a run over that minimap —
-position, speed, nitro, skid charge, item use — including comparing two runs. The
+**Replays.** It also reads STK's `.replay` files and draws a run over that minimap -
+position, speed, nitro, skid charge, item use - including comparing two runs. The
 world records shipped with the game are ordinary replay files, so they load like any
 other. The format is documented under [Replay files](#replay-files) below.
 
@@ -43,7 +43,7 @@ Both funnel into `Graph::createQuad`, which appends a node and grows `m_bb_min` 
 `m_bb_max`. `Graph::createMesh` turns the nodes into a triangle mesh, and
 `makeMiniMap` renders it to a render-target texture.
 
-Facts that the script depends on — all verified against `stk-code` master:
+Facts that the script depends on - all verified against `stk-code` master:
 
 - **Bounding box includes invisible quads.** It's updated in `createQuad`, which runs
   before any visibility filtering in `createMesh`. Getting this wrong shifts the whole
@@ -65,7 +65,7 @@ Facts that the script depends on — all verified against `stk-code` master:
   Consequence: on a non-square track the output has empty padding on one side. That's
   faithful, not a bug. `--fit` opts out of it and breaks mapPoint2MiniMap compatibility.
 - **Colors:** clear color `SColor(0,255,255,255)`, track fill `SColor(127,255,255,255)`
-  — i.e. white at alpha 127 on a transparent background. The material is opaque, so
+  - i.e. white at alpha 127 on a transparent background. The material is opaque, so
   overlapping quads *overwrite* rather than blend; the script replicates this by
   pasting through a binary coverage mask instead of alpha-compositing.
 - **Lap line:** node 0's quad, with edges p0→p3 and p1→p2 shortened to
@@ -80,7 +80,7 @@ Facts that the script depends on — all verified against `stk-code` master:
   flattens Y to 0.1. On sloped ground the XZ component of that offset differs per quad,
   so neighbours can miss each other by a sliver.
 - **Navmesh faces are not always quads.** `battleisland`'s has faces with 3, 5 and 6
-  indices. STK reads `all_vertices[quad_index[0..3]]` unconditionally — it truncates
+  indices. STK reads `all_vertices[quad_index[0..3]]` unconditionally - it truncates
   n-gons to the first four vertices and reads out of bounds on triangles. The script
   truncates too by default (faithful), with `--full-polys` to fan them properly.
 
@@ -95,12 +95,12 @@ Facts that the script depends on — all verified against `stk-code` master:
   drifted (uniform 127 came back as 126), hence the hand-rolled numpy box filter.
   numpy is optional; without it there's a lower-quality Lanczos fallback.
   The box filter reduces the two block axes one at a time rather than with
-  `mean(axis=(1, 3))` — twice as fast, and provably identical here because the
+  `mean(axis=(1, 3))` - twice as fast, and provably identical here because the
   coverage masks are binary, so the premultiplied values are exact in float32 and
   summation order cannot matter. Verified bit-identical across every style on five
   tracks; if the masks ever stop being binary, that guarantee goes with it.
 - **No outline on `clean`.** An inward stroke one output pixel wide is thinner than
-  the antialiasing ramp, so it never survives the resolve as its own colour — it
+  the antialiasing ramp, so it never survives the resolve as its own colour - it
   just stretches the ramp, which reads as blur rather than definition, and on a
   thin driveline it eats the whole width. `blueprint` keeps a stroke because its
   fill is translucent and barely registers without one. Hence per-style
@@ -118,8 +118,8 @@ Facts that the script depends on — all verified against `stk-code` master:
 ## Rotation
 
 `--rotate` turns the map by putting the rotation inside `Framing.to_px`, rather
-than rotating the finished image. Two reasons: everything that draws — the graph,
-the check lines, the replay route and markers — goes through that one function, so
+than rotating the finished image. Two reasons: everything that draws - the graph,
+the check lines, the replay route and markers - goes through that one function, so
 they stay consistent for free; and re-framing around the rotated extent avoids both
 the clipping and the resampling blur you would get from rotating a bitmap.
 
@@ -131,7 +131,7 @@ The angle is negated on the way in, so that a positive angle turns the map
 clockwise on screen. `+z` maps upward in the image, so the unnegated maths turns it
 the other way, which is not what "rotate right" means anywhere else.
 
-At an angle of zero the framing is bit-identical to the unrotated path — the same
+At an angle of zero the framing is bit-identical to the unrotated path - the same
 `bb_min` anchoring, so the `exact` contract is unaffected. Rotation does break
 `mapPoint2MiniMap` compatibility, as `--fit` does, and for the same reason: the
 mapping is no longer a plain affine transform of the world point.
@@ -202,7 +202,7 @@ space simply lands inside a differently-shaped box depending on the angle.
 
 Recorded frames are irregular and sparse: about 15 per second, with gaps ranging
 from 8ms to 100ms. At the 50fps redraw the marker would hold still for several
-frames and then jump — 4.5 world units at top speed. Positions are therefore
+frames and then jump - 4.5 world units at top speed. Positions are therefore
 linearly interpolated between the two bracketing frames, and the trail is drawn to
 the interpolated head rather than the last recorded point, or it visibly lags the
 marker. Speed in the readout is interpolated too; the categorical fields (skid
@@ -217,7 +217,7 @@ heading = atan2( 2(qx·qz + qy·qw),  1 − 2(qx² + qy²) )
 
 Two checks established that this is the right reading rather than a plausible
 one. Against the direction of travel it sits at a median 8.3°, where the mirrored
-interpretation is 80° out — so the axis and handedness are right. And the residual
+interpretation is 80° out - so the axis and handedness are right. And the residual
 is not error but **slip angle**: broken down by skid charge it is 0.3° when not
 skidding, 16.5° skidding uncharged, 21.4° at yellow and 25.1° at red. A conversion
 that was subtly wrong would not line up with the skid state like that.
@@ -248,22 +248,22 @@ nothing to revert to.
 Check structures live in the track's **`scene.xml`**, not in any of the graph
 files, under a `<checks>` element. Across the 44 stock 1.5 tracks there are only
 two element types: 126 `<check-line>` (101 `kind="activate"`, 25 `kind="lap"`) and
-23 `<check-lap>`. `check-lap` carries no geometry — it is the lap counter, and
-refers to check lines by id — so nothing is drawn for it. No shipped track defines
+23 `<check-lap>`. `check-lap` carries no geometry - it is the lap counter, and
+refers to check lines by id - so nothing is drawn for it. No shipped track defines
 `check-goal`, so soccer goal lines are still not available from here.
 
 The endpoint format is the trap. `p1` and `p2` are written **either** as `"x z"`
 **or** as `"x y z"`, matching `CheckLine`'s attempt at a 2D read before falling
 back to 3D. Taking the first two components unconditionally is wrong for the
-3-component form and collapses every line into a thin band near z = 0 — and it
+3-component form and collapses every line into a thin band near z = 0 - and it
 fails quietly, because those bogus coordinates still land inside most tracks'
 bounding boxes. Testing whether the line's midpoint falls on a painted quad
 separates the two cleanly: reading three components as `(x, y, z)` puts 85% of
 midpoints on the driveline, against 11% for the first-two reading.
 
-Lap lines are frequently much shorter than the gates — Hacienda's are two
+Lap lines are frequently much shorter than the gates - Hacienda's are two
 2-unit segments at the edges of the start line, against `activate` gates
-spanning ~26 units — so they can render as only a few pixels. That is the real
+spanning ~26 units - so they can render as only a few pixels. That is the real
 geometry.
 
 ### Sector splits
@@ -281,7 +281,7 @@ this, not assumed from the XML shape:
   carry an identical `same-group="3 4"` for the fork after the loop. That
   value only means what it looks like it means if check indices are counted
   over **every** direct child of `<checks>` in document order, including
-  `check-lap`, which has no geometry of its own — indices computed by
+  `check-lap`, which has no geometry of its own - indices computed by
   searching for `<check-line>` alone come out wrong. `sector_gates` groups
   lines by their literal `same-group` tuple; STK always gives even a lone
   gate a self-referential id (`same-group="1"` on a line at index 1), so the
@@ -357,7 +357,7 @@ size:     1505
 Things worth knowing, all established by measuring a real 1.5 recording rather
 than reading the source:
 
-- **x/y/z are world coordinates**, so `Framing.to_px` places them directly —
+- **x/y/z are world coordinates**, so `Framing.to_px` places them directly -
   the same transform the game uses for the kart markers. Verified against
   Hacienda: the replay spans x −3.2…293.4, z −138.5…172.2 against a track
   bounding box of x −5.1…302.4, z −140.0…178.3.
@@ -368,7 +368,7 @@ than reading the source:
   crossed. Running the maximum forward absorbs both, which is what
   `split_laps` and `time_at_distance` do.
 - **Skid charge lives in `skidding_effect`**, which steps `200 → 2000 → 2500`
-  through a single skid — pre-charge, yellow, red. `red_skidding` is *not* the
+  through a single skid - pre-charge, yellow, red. `red_skidding` is *not* the
   charge level: it marks the boost being spent, so it is already set before the
   next skid begins. Colouring by it gives visibly wrong results.
 - **`nitro_usage` is 0 or 800**, i.e. effectively a boolean.
@@ -383,24 +383,24 @@ which is comfortably good enough for choosing what to draw.
 
 Two sources:
 
-- **What the player recorded** — the same per-user directory the addon tracks
+- **What the player recorded** - the same per-user directory the addon tracks
   live beside (`%APPDATA%\supertuxkart\replay`, `~/.local/share/...`, and the
   flatpak/snap variants).
-- **What ships with the game** — `<data>/replay`, a sibling of the
+- **What ships with the game** - `<data>/replay`, a sibling of the
   `<data>/tracks` that track discovery already locates. Deriving it from there
   rather than writing a second set of platform guesses means Windows, macOS,
   Steam, flatpak and snap all work for free, and `--data-dir` picks up that
   install's records too. STK 1.5 ships 51: 21 `wr_*` world records, 25
   `standard_*` ghosts, 4 `challenge_*` and one benchmark.
 
-The `wr_*` files carry an extra `info:` header line — *"Hacienda (Glitchless) -
-Former World Record set on 25 March 2020"* — which is the only way to tell a
+The `wr_*` files carry an extra `info:` header line - *"Hacienda (Glitchless) -
+Former World Record set on 25 March 2020"* - which is the only way to tell a
 current record from a former one, so it's surfaced in the browser.
 
 Dates come from the filename (`<track>_<YYYYMD>_<n>_<sec>_<frac>`), not the
 file mtime: every shipped record has the packaging date as its mtime, which
 sorts them meaninglessly. The month and day are **not** zero-padded, so
-`2025824` is 2025-08-24 while `202153` is 2021-05-03 — the split is ambiguous
+`2025824` is 2025-08-24 while `202153` is 2021-05-03 - the split is ambiguous
 and has to be tried both ways, taking whichever yields a valid date. The
 middle number is not the kart count, lap count or difficulty; nothing depends
 on it.
@@ -456,10 +456,33 @@ the same way `default_track_dirs` locates the game's data (PATH first, a
 binary next to an already-found `data/tracks` directory, a couple of fixed
 spots on macOS, a flatpak fallback).
 
+**That work has since started** - see [`../patches/`](../patches/) for the
+patch series and the wire protocol. Two further findings from reading the 1.5
+source directly, both of which make it considerably smaller than feared:
+
+- **Watch-replay mode has no physics to unwind.**
+  `RaceManager::startWatchingReplay` sets `m_num_karts = getNumGhostKart()`
+  and marks every kart `KT_GHOST`. There is no physics-driven player kart, so
+  seeking is only moving a clock that every position is a pure function of -
+  categorically easier than rewinding a live race, which stays out of scope.
+- **The seek and pause primitives already exist and are already public.**
+  `WorldStatus` exposes `setTime(float)`, `setTicks(int)`, `pause(Phase)` and
+  `unpause()`. `setTime` is four lines and sets both `m_time_ticks` and
+  `m_time`. Nothing needed to be added to reach them.
+
+So the actual blocker was a single forward-only loop in
+`GhostController::update`, plus a visibility latch in `GhostKart::update` -
+both fixed in `patches/0001`, with the defect and the fix measured against
+real replay data rather than argued from the source. The clock itself advances
+one tick per `updateTime()` call in `CLOCK_CHRONO`; because ghost positions
+are a pure function of that clock, rate control and pause are best done by
+driving `m_time` directly in watch-replay mode rather than by trying to change
+the main loop's tick rate.
+
 ## Known gaps / not implemented
 
 - Soccer goal-line node coloring (`ArenaGraph::differentNodeColor` paints red/blue
-  nodes). Needs `findRoadSector` + Dijkstra over the navmesh — real work.
+  nodes). Needs `findRoadSector` + Dijkstra over the navmesh - real work.
 - CTF flag bounding-box expansion in `makeMiniMap`.
 - Non-square render targets. STK's minimap RTT is square in practice and
   `mapPoint2MiniMap` uses `dimension.Width` for both axes, so a non-square target would
@@ -479,7 +502,7 @@ Validated against a stock **SuperTuxKart 1.5** install on Arch Linux:
   background `(255,255,255,0)`, lap line `(255,0,0,128)` on race tracks only, with
   roughly 1% antialiased edge pixels in between.
 - Every visible quad's centroid lands on a painted pixel, and `bb_min` maps to the
-  bottom-left corner exactly — `(0.0, 512.0)` at the default size.
+  bottom-left corner exactly - `(0.0, 512.0)` at the default size.
 
 Earlier validation, from before an STK install was available, used a `quads.xml`
 reassembled from real `olivermath` data and a synthetic `navmesh.xml` exercising 3-,
@@ -491,14 +514,14 @@ The GUI was driven end to end under a real Tk main loop: track list, preview,
 (load, scrub, rate, lap follow, skid and nitro rings, two-run comparison).
 
 Two traps if you write more of those. Stubbing out `mainloop` produces failures
-that are artifacts of the stub rather than the code — drive a real main loop and
+that are artifacts of the stub rather than the code - drive a real main loop and
 script the steps with `after()` instead. And since the track filters now persist,
 anything driving the GUI must run with an isolated `XDG_CONFIG_HOME` (or
 `%APPDATA%`), or a partially-completed run leaves saved filters behind and the
 next one starts from a different list.
 
-Replay parsing was checked against all 108 replays available — 57 local
-recordings plus the 51 that ship with 1.5 — with no failures and no
+Replay parsing was checked against all 108 replays available - 57 local
+recordings plus the 51 that ship with 1.5 - with no failures and no
 out-of-range lap indices. Every one is a single-kart run, so the multi-kart
 path is covered only by a hand-built two-kart file.
 

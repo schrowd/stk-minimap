@@ -1,6 +1,6 @@
 # STK Minimap
 
-Render any SuperTuxKart track's minimap to a PNG — and play your replays back
+Render any SuperTuxKart track's minimap to a PNG - and play your replays back
 on top of it.
 
 <p align="center">
@@ -39,16 +39,16 @@ makes the downscaling alpha-correct and a bit sharper).
 
 ### Windows
 
-1. Install Python from [python.org](https://www.python.org/downloads/) — tick
+1. Install Python from [python.org](https://www.python.org/downloads/) - tick
    **"Add python.exe to PATH"** during setup.
 2. Open Command Prompt and run:
    ```
    pip install pillow numpy
    ```
 3. Download `stk_minimap.py` (and `STK Minimap.pyw`, optional) from this repo.
-4. **Double-click `stk_minimap.py`** — the window opens and finds your tracks by
+4. **Double-click `stk_minimap.py`** - the window opens and finds your tracks by
    itself. Double-click `STK Minimap.pyw` instead if you'd rather not have a
-   console window behind it. (That `.pyw` trick is Windows-only — the extension
+   console window behind it. (That `.pyw` trick is Windows-only - the extension
    has no effect on Linux or macOS.)
 
 ### Linux
@@ -83,7 +83,7 @@ pip3 install pillow numpy
 python3 stk_minimap.py --gui
 ```
 
-`tk` / `python3-tk` is only needed for the GUI — the command line works without
+`tk` / `python3-tk` is only needed for the GUI; the command line works without
 it.
 
 ---
@@ -100,7 +100,7 @@ Pick a track from the list on the left and the preview updates immediately.
 Filter it by **type** (race, arena, soccer) and by **source** (built-in or
 add-ons), tick **Show in-game names** to list them as *Antediluvian Abyss*
 rather than `abyss`, and search either form. Cutscenes and grand-prix screens
-are left out — they carry no graph, so there's nothing to draw.
+are left out: they carry no graph, so there's nothing to draw.
 
 Those three settings are remembered between runs, in
 `%APPDATA%\stk-minimap\settings.json` on Windows or
@@ -121,7 +121,7 @@ look like an empty box.
 
 ## Replays
 
-**Browse replays…** lists every replay on your machine in a sortable table —
+**Browse replays…** lists every replay on your machine in a sortable table -
 your own runs *and* the 21 world records and challenge ghosts that ship with
 SuperTuxKart 1.5. Click any column to sort:
 
@@ -134,7 +134,7 @@ SuperTuxKart 1.5. Click any column to sort:
 | **Source** | World record, Ghost, Challenge, or Yours |
 
 **Show** narrows it to one source, and the search box matches track, driver or
-filename. Selecting a run shows its description underneath — that's how you
+filename. Selecting a run shows its description underneath; that's how you
 tell a current world record from a former one. **Load** opens it; double-click
 does the same.
 
@@ -154,7 +154,7 @@ the lap, speed in km/h, nitro in hand, items held, and which of nitro/skid/
 zipper is active on the current frame.
 
 **Lap** decides how much of the run is drawn. A three-lap run stacked on one
-piece of track is unreadable, so the default is **Follow** — only the lap the
+piece of track is unreadable, so the default is **Follow**: only the lap the
 playhead is in. Pick **All** for the whole run, or a specific lap to compare
 one against another.
 
@@ -162,7 +162,7 @@ one against another.
 
 | Mode | Draws |
 |---|---|
-| **Speed** | blue where you're slow through to red where you're quick — where a run loses time, at a glance |
+| **Speed** | blue where you're slow through to red where you're quick - where a run loses time, at a glance |
 | **Nitro & skid** | a dim route, cyan where nitro was burning, yellow and red where a skid was charged |
 | **Plain** | just the line |
 
@@ -188,8 +188,8 @@ a dot. On a straight it's essentially zero; through a charged red skid the kart
 runs about 25° sideways to its own direction of travel. Watching the arrow swing
 out and come back is watching the drift.
 
-Karts are drawn slightly smaller each, so when two runs are on the same corner —
-or exactly on top of each other, as they are at the start — the larger one's rim
+Karts are drawn slightly smaller each, so when two runs are on the same corner -
+or exactly on top of each other, as they are at the start - the larger one's rim
 stays visible around the smaller one and you can still see both.
 
 Positions are interpolated between recorded frames. Replays only store about 15
@@ -199,13 +199,13 @@ reason.
 
 The rings are at different radii, so a red skid while on nitro shows both at once.
 The skid charge comes from the replay's own `skidding_effect` column, which
-steps up as you hold the skid — the same thing that turns the sparks yellow
+steps up as you hold the skid - the same thing that turns the sparks yellow
 then red in game.
 
 ### Comparing two runs
 
 **Compare with…** opens the browser again to pick the second run, already
-narrowed to the track you're on — only same-track runs can be compared. Both
+narrowed to the track you're on; only same-track runs can be compared. Both
 then play together as run **A** and run **B**, each with its own colour, marker
 and readout line. (**Pick a file…** in the browser takes a `.replay` from
 anywhere, for either slot.)
@@ -217,7 +217,7 @@ Underneath them is the gap:
 ```
 
 That's the difference measured **at the same place on the track**, not at the
-same moment in time — the same thing a ghost shows you. Positions at the same
+same moment in time - the same thing a ghost shows you. Positions at the same
 timestamp only tell you who's further ahead; the time difference at a given
 corner is what tells you where a run was actually won or lost. Scrub through
 and watch the number grow or shrink to find the sections that cost you.
@@ -229,7 +229,7 @@ The obvious use: load a world record as **A**, then **Browse replays…** →
 **Compare with loaded run** on your own attempt, and scrub through to see
 exactly which corners the record is taking better.
 
-Replays with more than one kart — a run recorded against a ghost — already
+Replays with more than one kart - a run recorded against a ghost - already
 contain two karts, and are drawn the same way.
 
 The map has to match the replay: opening one selects its track for you, and if
@@ -239,12 +239,12 @@ map.
 ### When a shortcut goes off the map
 
 Some tracks have shortcuts that leave the area STK actually built the minimap
-from — Cocoa Temple's is the one that turns this up, but it isn't the only
+from - Cocoa Temple's is the one that turns this up, but it isn't the only
 one. The route and the kart marker used to just vanish for however long the
 run was off that area, since anything drawn outside the canvas is silently
 clipped rather than an error. The window and every `--replay` render now grow
 the canvas to fit the whole recorded path when this happens, so the shortcut
-stays fully visible — you'll see the game-accurate map in its usual position
+stays fully visible; you'll see the game-accurate map in its usual position
 with a bit of extra canvas around whichever side the shortcut went off. This
 only ever triggers when a replay's path genuinely leaves the frame; an
 ordinary run never changes the output at all.
@@ -252,35 +252,71 @@ ordinary run never changes the output at all.
 ### Sector splits
 
 Below the playback controls, the **Splits** panel breaks the loaded run into
-sectors using the track's own `activate` check lines — the gates a route has
+sectors using the track's own `activate` check lines: the gates a route has
 to cross in order for a lap to count. Each row is a lap; the last row is the
 **theoretical best**, the fastest time seen in each sector across every lap in
 the file, added up. Only tracks with check lines have this; most stock tracks
 do.
 
 **Export splits CSV…** writes that table to a file. **Export telemetry
-CSV…** writes the whole recording — position, speed, heading, nitro, skid
-level, lap, distance — one row per frame, for anyone who wants to do more with
+CSV…** writes the whole recording - position, speed, heading, nitro, skid
+level, lap, distance - one row per frame, for anyone who wants to do more with
 it than this window shows.
 
 ### Keyboard
 
 With a replay loaded: **Space** plays or pauses, **←/→** step one recorded
 frame at a time (pausing first, so stepping is predictable), **Home/End** jump
-to the start or end. These work regardless of which control last had focus —
+to the start or end. These work regardless of which control last had focus -
 clicking the scrub slider, a button, or the splits table won't swallow them.
 They don't fire while you're typing in a text box.
 
 ### Orientation always matches the game
 
 Once a replay is loaded, **Rotate** locks to 0° and greys out. A rotated view
-is genuinely useful for a diagram, but not for a replay — a replay is only
+is genuinely useful for a diagram, but not for a replay; a replay is only
 useful if what you're looking at is trustworthy against what actually
 happened, so there's no way to leave one rotated by accident. `--invert-x-z`
 (the mirroring the game itself does for the blue soccer team) is threaded
 through the same way, for the same reason, though it never applies to a
-`.replay` file in practice — ghost replays are time-trial only, and the
+`.replay` file in practice; ghost replays are time-trial only, and the
 mirror is soccer-only.
+
+---
+
+## Live sync with the game (optional)
+
+Everything above works against the SuperTuxKart you already have. This part
+needs a **patched** build, and is entirely optional.
+
+With it, the map and the game share one playback head: pause, scrub or slow a
+replay in either window and the other follows. Load a replay in-game with
+nothing open here, and the map finds that same `.replay` and starts following
+it on its own.
+
+Build the patched game with one command:
+
+```bash
+./patches/build.sh
+```
+
+It clones SuperTuxKart 1.5, applies the four patches in
+[`patches/`](patches/), reuses your existing install's tracks and karts rather
+than downloading them again, and builds. Then open the **Replay** tab and
+press **Launch SuperTuxKart**: the button starts the patched build with the
+sync port already set and connects to it, so there's no flag to remember.
+
+The patches are opt-in at runtime too. Without `--sync-port`, a patched build
+behaves exactly like the stock game: no socket, no thread, no difference. The
+connection is loopback-only and never reachable from another machine.
+
+Two of the four patches are worth having regardless of sync: one fixes replay
+rewind being broken (the ghost freezes when the clock moves backwards), and
+one fixes a **crash in stock SuperTuxKart 1.5** when watching
+`wr_candela_city_202598_1_82_3725.replay`, a world record that ships with the
+game. [`patches/README.md`](patches/README.md) has the details and the
+verification for all four; [`patches/PROTOCOL.md`](patches/PROTOCOL.md) is the
+wire protocol.
 
 ---
 
@@ -323,7 +359,7 @@ which have no driveline).
 | `--supersample` | antialiasing factor, default 4 (the game itself uses 2) |
 | `--fit` | crop to the track instead of the game's square view |
 | `--margin` | padding fraction, `--fit` only |
-| `--reverse` | reverse mode — honours `direction="forward\|reverse"` quads |
+| `--reverse` | reverse mode - honours `direction="forward\|reverse"` quads |
 | `--show-invisible` | also draw quads the game hides |
 | `--invert-x-z` | mirror X and Z, as the game does for the blue soccer team |
 | `--full-polys` | navmesh: draw >4-sided faces in full (the game truncates them) |
@@ -348,16 +384,16 @@ which have no driveline).
   <img src="docs/styles.png" width="720" alt="exact, clean and blueprint styles">
 </p>
 
-**`exact`** (default) — what the game actually renders: white at alpha 127 on a
+**`exact`** (default) - what the game actually renders: white at alpha 127 on a
 fully transparent background. On its own it looks blank in most image viewers;
 that's correct, and it's the one to use if you're compositing over the in-game
 minimap. Shown above over grey so you can see it at all.
 
-**`clean`** — light track on a dark background. What you want for a guide, a
+**`clean`**: light track on a dark background. What you want for a guide, a
 diagram, or a Discord post. Deliberately has no outline: a stroke thinner than
 the antialiasing ramp can't survive the downscale as its own colour, so it just
 softens the edge instead of defining it. Add one with `--outline 2` if you want
-it. **`blueprint`** — the same geometry in a schematic blue; this one keeps its
+it. **`blueprint`**: the same geometry in a schematic blue; this one keeps its
 outline, because its fill is translucent and would barely register without it.
 
 `clean` and `blueprint` are cosmetic and may change between versions. `exact` is
@@ -372,8 +408,8 @@ you want it on a page. **Rotate** in the window turns the map in 15° steps, and
 `--rotate 90` does the same from the command line. Positive angles turn it
 clockwise; any angle works, not just multiples of 90.
 
-Everything rotates together — the track, the check lines and the replay
-overlay — because they all go through the same projection. The image is
+Everything rotates together - the track, the check lines and the replay
+overlay - because they all go through the same projection. The image is
 re-framed around the rotated track rather than rotated as a picture, so nothing
 is clipped and there's no resampling blur.
 
@@ -391,8 +427,8 @@ structures from the track's `scene.xml` on top of the map:
 
 | Colour | |
 |---|---|
-| **Cyan** | `activate` gates — the checkpoints that must be crossed **in order** |
-| **Red** | `lap` lines — what actually counts a lap |
+| **Cyan** | `activate` gates - the checkpoints that must be crossed **in order** |
+| **Red** | `lap` lines - what actually counts a lap |
 
 This is the geometry that decides whether a shortcut counts. A route that skips
 a cyan gate won't validate a lap no matter how fast it is, so seeing where the
@@ -403,8 +439,8 @@ have none at all. They're an annotation rather than part of the game's texture,
 so they're off by default and drawing them takes `--style exact` away from being
 a faithful copy of the in-game image.
 
-Note that lap lines are often very short — Hacienda's are two 2-unit segments at
-the edge of the start line, against gates that span 26 units — so at small sizes
+Note that lap lines are often very short - Hacienda's are two 2-unit segments at
+the edge of the start line, against gates that span 26 units - so at small sizes
 they can be a couple of pixels. That's the real geometry, not a rendering
 problem.
 
@@ -440,7 +476,7 @@ Two things to know:
 
 - **Height (`y`) is ignored.** The minimap is a flat top-down projection.
 - **Non-square tracks get empty padding on one side.** The game's orthographic
-  box is square — `range = max(width, depth)` — and it's deliberately anchored
+  box is square - `range = max(width, depth)` - and it's deliberately anchored
   so that the mapping above stays a plain affine transform. That padding is
   faithful, not a bug. `--fit` crops it away, and doing so **breaks the
   mapping**, so don't use `--fit` for overlays.
@@ -451,7 +487,7 @@ Two things to know:
 
 Windows
 - `C:\Program Files\SuperTuxKart*\data\tracks` (and the x86 / `PROGRAMW6432` variants)
-- `%APPDATA%\supertuxkart\addons\tracks` — tracks you downloaded in-game
+- `%APPDATA%\supertuxkart\addons\tracks` - tracks you downloaded in-game
 - Steam libraries, found by reading `steamapps\libraryfolders.vdf`
 - portable zips extracted to Desktop, Downloads, Documents, Games, `C:\`, `D:\`
 - a `data\tracks` folder next to the script, so you can drop it into the game folder
@@ -472,7 +508,7 @@ into (`%APPDATA%\supertuxkart\replay` on Windows,
 `~/.local/share/supertuxkart/replay` on Linux,
 `~/Library/Application Support/SuperTuxKart/replay` on macOS), and the `replay`
 folder that sits next to the `tracks` folder of whichever install was found
-above — which is where the shipped world records live. Pointing the tool at a
+above - which is where the shipped world records live. Pointing the tool at a
 different install with `--data-dir` picks up that install's records too.
 
 If none of that matches your setup, set `STK_TRACK_DIR` or pass `--data-dir`:
@@ -494,14 +530,14 @@ This is a reimplementation of `Graph::makeMiniMap` and its callees from
 Behaviours that are reproduced on purpose, because getting any of them wrong
 shifts or distorts the image:
 
-- The bounding box includes **invisible** quads — the game grows it in
+- The bounding box includes **invisible** quads: the game grows it in
   `createQuad`, before any visibility filtering.
 - The orthographic box is square and offset toward the shorter axis, anchoring
   the track at the bounding-box minimum on both axes.
 - Overlapping quads **overwrite** rather than blend, because the game's material
   is opaque.
 - The lap line is node 0's quad, shortened to 3% of the track's Z extent, drawn
-  in red — and only for race tracks, never arenas.
+  in red - and only for race tracks, never arenas.
 - `p0="3:2"` in `quads.xml` means "point 2 of quad 3"; most quads share an edge
   with their neighbour this way.
 - Navmesh faces aren't always four-sided. The game reads the first four indices
@@ -511,13 +547,13 @@ Rendering is supersampled and resolved with a premultiplied box filter, which
 keeps `exact` landing on alpha 127 exactly. (Lanczos rings past 127 and breaks
 that guarantee, so it's only used as a fallback when NumPy isn't installed.)
 
-If you want to change any of that, read [docs/NOTES.md](docs/NOTES.md) first — it
+If you want to change any of that, read [docs/NOTES.md](docs/NOTES.md) first; it
 records the research behind these decisions and the traps in reproducing them.
 
 ### Known gaps
 
 - Soccer goal-line node colouring (`ArenaGraph::differentNodeColor`) isn't
-  implemented — it needs a Dijkstra pass over the navmesh.
+  implemented: it needs a Dijkstra pass over the navmesh.
 - CTF flag bounding-box expansion isn't implemented.
 - `height-testing` elements are parsed and ignored; they only affect physics.
 - Only the `default` `<mode>` from `track.xml` is honoured.
@@ -526,7 +562,7 @@ records the research behind these decisions and the traps in reproducing them.
 
 ## Troubleshooting
 
-**The PNG looks blank / empty.** That's `--style exact` doing its job — it's
+**The PNG looks blank / empty.** That's `--style exact` doing its job: it's
 white at alpha 127 on a transparent background, so a white image viewer shows
 nothing. Use `--style clean`, or `--background '#101418'`.
 
@@ -552,5 +588,5 @@ SuperTuxKart is made by the [SuperTuxKart team](https://supertuxkart.net/); all
 the track data and the minimap algorithm are theirs. This is an independent tool
 and isn't affiliated with or endorsed by the project.
 
-Licensed under the **GPL-3.0**, the same licence as SuperTuxKart's code — see
+Licensed under the **GPL-3.0**, the same licence as SuperTuxKart's code; see
 [LICENSE](LICENSE).
