@@ -1,13 +1,13 @@
-# stk-minimap ⇄ SuperTuxKart sync protocol
+# stk-viewer ⇄ SuperTuxKart sync protocol
 
 Version 1. **Both sides are implemented and verified**: the game side in
 [`0004-replay-sync-server.patch`](README.md), the viewer side in
-`stk_minimap/sync/client.py`'s `SyncClient` and the `sync_*` methods in
-`stk_minimap/gui/replay_tab.py`, driven against a fake server
+`stk_viewer/sync/client.py`'s `SyncClient` and the `sync_*` methods in
+`stk_viewer/gui/replay_tab.py`, driven against a fake server
 speaking this exact protocol, and separately against the real patched binary.
 The "avoiding a feedback loop" rules below are tested behaviour, not just
 design intent - see `SYNC_DEADBAND` and `SYNC_LOCAL_HOLDOFF` in
-`stk_minimap/sync/`.
+`stk_viewer/sync/`.
 
 The goal is two-way sync: pause in either window and both pause; scrub in
 either and both scrub. This document is the contract between the STK patch

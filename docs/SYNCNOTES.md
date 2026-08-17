@@ -2,7 +2,7 @@
 
 Design rationale and verification behind the SuperTuxKart patches in
 [`../patches/`](../patches/) and the viewer's sync client in
-`stk_minimap/sync/client.py` and `stk_minimap/gui/replay_tab.py`.
+`stk_viewer/sync/client.py` and `stk_viewer/gui/replay_tab.py`.
 Companion to [`NOTES.md`](NOTES.md) - same idea, different half of the
 project: kept because most of it can't be reconstructed from the code alone,
 and it isn't worth re-deriving next time this gets touched.
@@ -192,8 +192,8 @@ Two claims checked against the running game rather than the harness:
 
 ## The viewer side
 
-`stk_minimap/sync/client.py`'s `SyncClient`, and the `sync_*` bridge methods
-on `stk_minimap/gui/replay_tab.py`'s `ReplayTabMixin`. Structurally, the two
+`stk_viewer/sync/client.py`'s `SyncClient`, and the `sync_*` bridge methods
+on `stk_viewer/gui/replay_tab.py`'s `ReplayTabMixin`. Structurally, the two
 sync directions never cross: local input handlers
 (`rp_toggle`, `rp_scrub`, `on_key_step`, `on_key_end`, the rate combobox's
 trace) call `sync_send()`, which both transmits and starts a 250ms local-wins

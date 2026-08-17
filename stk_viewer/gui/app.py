@@ -50,7 +50,7 @@ class App(RenderTabMixin, ReplayTabMixin):
         self.sync_connected = False
         self._sync_local_until = 0.0     # monotonic deadline, see holdoff
         self._sync_rate_guard = False    # suppress the rate trace's send
-        root.title(f"STK Minimap {__version__}")
+        root.title(f"STK Viewer {__version__}")
         root.minsize(880, 560)
 
         outer = ttk.Frame(root, padding=8)

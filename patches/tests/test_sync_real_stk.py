@@ -14,7 +14,7 @@ import sys
 import time
 
 import _paths
-from stk_minimap.game.discovery import default_patched_stk_binary
+from stk_viewer.game.discovery import default_patched_stk_binary
 
 PORT = 27997
 
@@ -39,7 +39,7 @@ def main():
     # stdout=PIPE without draining it deadlocks STK once its startup log
     # fills the 64KB pipe buffer, well before it gets anywhere near
     # --sync-port - a log *file* doesn't have that problem.
-    log_path = _paths.scratch_dir("stk-minimap-e2e-") / "stk_real_e2e.log"
+    log_path = _paths.scratch_dir("stk-viewer-e2e-") / "stk_real_e2e.log"
     log = open(log_path, "w")
     stk = subprocess.Popen(
         [str(binary), "--no-graphics", f"--sync-port={PORT}"],

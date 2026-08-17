@@ -58,7 +58,7 @@ def default_track_dirs() -> list[str]:
 
     # an STK folder sitting next to the package (repo root, three levels up
     # from this file), or next to the cwd - covers the Windows portable zip,
-    # where people drop the whole stk-minimap folder into the game folder
+    # where people drop the whole stk-viewer folder into the game folder
     here = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     for base in (here, os.getcwd()):
         cands += [os.path.join(base, "data", "tracks"),
@@ -172,7 +172,7 @@ def resolve_track(arg: str, extra_dirs: list[str], tmpdirs: list[str]) -> str:
     if os.path.isdir(arg):
         return arg
     if os.path.isfile(arg) and zipfile.is_zipfile(arg):
-        tmp = tempfile.mkdtemp(prefix="stk-minimap-")
+        tmp = tempfile.mkdtemp(prefix="stk-viewer-")
         tmpdirs.append(tmp)
         with zipfile.ZipFile(arg) as z:
             z.extractall(tmp)

@@ -3,7 +3,7 @@
 A fake SuperTuxKart sync listener, speaking the exact wire protocol the real
 ReplaySyncServer implements (patches/replay_sync_server.cpp, verified against
 the real running binary in the previous session).  Used to test
-stk_minimap's SyncClient/App integration without the full game.
+stk_viewer's SyncClient/App integration without the full game.
 
 Usage: fake_stk.py <port> <replay_basename> <duration> [--no-replay-line]
 """

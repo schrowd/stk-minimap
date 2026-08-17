@@ -1,6 +1,6 @@
 # SuperTuxKart patches
 
-These patch **SuperTuxKart itself**, not stk-minimap, to make a replay
+These patch **SuperTuxKart itself**, not stk-viewer, to make a replay
 controllable from outside the game - so that pausing, scrubbing or slowing a
 run in one window does the same in the other.
 
@@ -9,7 +9,7 @@ protocol, and the viewer has a client for it (`SyncClient` and the
 `sync_*` methods, in the Replay tab). See [`PROTOCOL.md`](PROTOCOL.md) for
 what's verified and how.
 
-Nothing here is required to use stk-minimap. Without a patched game and
+Nothing here is required to use stk-viewer. Without a patched game and
 `--sync-port`, the viewer works exactly as it always has against the stock
 game.
 
@@ -129,7 +129,7 @@ refusal from a LAN address, real behaviour with the flag absent). Full
 breakdown, including the main-loop-blocking measurement:
 [`../docs/SYNCNOTES.md`](../docs/SYNCNOTES.md#0004---replay-sync-server).
 
-### The viewer side (`stk_minimap/sync/client.py`, `stk_minimap/gui/replay_tab.py`)
+### The viewer side (`stk_viewer/sync/client.py`, `stk_viewer/gui/replay_tab.py`)
 
 `SyncClient`, a background thread doing the actual socket I/O, and a set of
 `sync_*` methods on `ReplayTabMixin`, in the Replay tab. Everything the
@@ -177,25 +177,25 @@ Clones `stk-code` at tag `1.5`, applies all four patches, symlinks assets
 from an existing SuperTuxKart install if it finds one (see below), and builds
 with cmake + ninja. Safe to re-run - an existing checkout is reused rather
 than re-cloned, and the build itself is incremental. Defaults to
-`~/.local/share/stk-minimap/stk-code` (`--dir` to use somewhere else,
-`--jobs` to control parallelism); this is also where the stk_minimap GUI
+`~/.local/share/stk-viewer/stk-code` (`--dir` to use somewhere else,
+`--jobs` to control parallelism); this is also where the stk_viewer GUI
 looks for the result on its own, so for most people this one command plus the
 GUI's **Launch SuperTuxKart** button (Replay tab) is the entire setup.
 
 Verified: a clean run against a fresh clone builds successfully end to end,
 a second run against the same checkout is a 0.8s no-op (`ninja: no work to
 do`), and the resulting binary genuinely listens - confirmed both from the
-shell and by connecting stk_minimap's real sync client to it.
+shell and by connecting stk_viewer's real sync client to it.
 
 Doing it by hand is the same four steps, if you'd rather:
 
 ```bash
 git clone --depth 1 --branch 1.5 https://github.com/supertuxkart/stk-code.git
 cd stk-code
-git apply /path/to/stk-minimap/patches/0001-ghost-controller-seekable.patch
-git apply /path/to/stk-minimap/patches/0002-replay-playback-control.patch
-git apply /path/to/stk-minimap/patches/0003-fix-replay-trailing-blank-line-crash.patch
-git apply /path/to/stk-minimap/patches/0004-replay-sync-server.patch
+git apply /path/to/stk-viewer/patches/0001-ghost-controller-seekable.patch
+git apply /path/to/stk-viewer/patches/0002-replay-playback-control.patch
+git apply /path/to/stk-viewer/patches/0003-fix-replay-trailing-blank-line-crash.patch
+git apply /path/to/stk-viewer/patches/0004-replay-sync-server.patch
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_RECORDER=0
 ninja -C build
 ```
@@ -273,10 +273,10 @@ python3 test_autoload_real_stk.py     # same, for the auto-follow specifically
 
 Each is a standalone script (`python3 <file>.py`), not a pytest suite - matching
 the rest of this project's style. All of them build and drive the real
-`stk_minimap.gui.app.App` (see `_paths.build_app()`) rather than a mock, and
-none of them can touch a real `~/.config/stk-minimap/settings.json` -
+`stk_viewer.gui.app.App` (see `_paths.build_app()`) rather than a mock, and
+none of them can touch a real `~/.config/stk-viewer/settings.json` -
 `_paths.py` redirects `XDG_CONFIG_HOME`/`APPDATA` to a throwaway directory
-before `stk_minimap` is even imported.
+before `stk_viewer` is even imported.
 
 `test_sync_client.py` and `test_autoload.py` need one or two locally-recorded
 Hacienda replays to run against and skip (not fail) if none are found -

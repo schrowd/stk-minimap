@@ -3,7 +3,7 @@ Shared setup for the sync test suite: path resolution, config isolation, and
 the App/import boilerplate every test in this directory needs.
 
 Import this before anything else - before tkinter, before importing
-stk_minimap - since config isolation has to be in place before App.__init__
+stk_viewer - since config isolation has to be in place before App.__init__
 calls load_settings().
 """
 import os
@@ -15,32 +15,32 @@ TESTS_DIR = pathlib.Path(__file__).resolve().parent
 REPO = TESTS_DIR.parent.parent
 FAKE_STK = TESTS_DIR / "fake_stk.py"
 
-# so `import stk_minimap` (and its submodules) resolves to the package at the
+# so `import stk_viewer` (and its submodules) resolves to the package at the
 # repo root, regardless of the caller's own working directory
 sys.path.insert(0, str(REPO))
 
 # Redirect settings.json to a throwaway directory so a test run can never
-# write into the developer's real ~/.config/stk-minimap/settings.json - which
+# write into the developer's real ~/.config/stk-viewer/settings.json - which
 # is exactly what happened before this existed: a scratch "fake_binary" path
 # ended up persisted in a live config and showing up in the GUI.
 #
 # HOME is deliberately left alone: default_patched_stk_binary() resolves
 # through XDG_DATA_HOME / ~/.local/share, and moving HOME would hide a real
 # patches/build.sh output that some tests exist to find.
-_CONFIG_DIR = tempfile.mkdtemp(prefix="stk-minimap-test-config-")
+_CONFIG_DIR = tempfile.mkdtemp(prefix="stk-viewer-test-config-")
 os.environ["XDG_CONFIG_HOME"] = _CONFIG_DIR   # Linux/BSD branch
 os.environ["APPDATA"] = _CONFIG_DIR           # Windows branch
 
 
 def build_app(extra_dirs=None):
     """
-    Constructs the real App (stk_minimap.gui.app.App) - the same class
+    Constructs the real App (stk_viewer.gui.app.App) - the same class
     run_gui() builds a window around - with Tk.mainloop stubbed so
     constructing it never blocks.
     """
     import tkinter as tk
 
-    from stk_minimap.gui.app import App
+    from stk_viewer.gui.app import App
     tk.Tk.mainloop = lambda self, n=0: None
     root = tk.Tk()
     return App(root, extra_dirs or [])
@@ -70,7 +70,7 @@ def wait_for(app, pred, timeout=5.0, step=0.02):
     return False
 
 
-def scratch_dir(prefix="stk-minimap-test-"):
+def scratch_dir(prefix="stk-viewer-test-"):
     """A fresh throwaway directory for a test's own temp files (logs,
     stand-in binaries, probe files), instead of a hardcoded /tmp path."""
     return pathlib.Path(tempfile.mkdtemp(prefix=prefix))
@@ -80,7 +80,7 @@ def stk_binary_root(binary: str) -> pathlib.Path:
     """Given a path to a patched supertuxkart binary at the usual
     <root>/build/bin/<exe> layout, returns <root> - the working directory
     the game must be launched from so its data/ resolves (see
-    stk_minimap.game.launcher.launch_stk)."""
+    stk_viewer.game.launcher.launch_stk)."""
     return pathlib.Path(binary).resolve().parent.parent.parent
 
 
@@ -141,7 +141,7 @@ def find_local_replays(track="hacienda", n=2):
     developer actually having recorded runs, so callers should skip rather
     than fail if there aren't enough.
     """
-    from stk_minimap.replay.parser import default_replay_dirs, replay_header
+    from stk_viewer.replay.parser import default_replay_dirs, replay_header
 
     found = []
     for d in default_replay_dirs():

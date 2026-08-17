@@ -1,4 +1,4 @@
-# STK Minimap
+# STK Viewer
 
 Render any SuperTuxKart track's minimap to a PNG - and play your replays back
 on top of it.
@@ -36,8 +36,8 @@ a run is actually losing time.
 
 You need **Python 3.9+** and **Pillow**. NumPy is optional but recommended (it
 makes the downscaling alpha-correct and a bit sharper). There's nothing to
-install beyond that - `stk_minimap` is a plain Python package, run in place;
-clone or download this repo and run it with `python3 -m stk_minimap` from the
+install beyond that - `stk_viewer` is a plain Python package, run in place;
+clone or download this repo and run it with `python3 -m stk_viewer` from the
 repo root.
 
 ### Windows
@@ -50,7 +50,7 @@ repo root.
    ```
 3. Download this repo (**Code → Download ZIP** on GitHub, or `git clone`) and
    unzip it.
-4. **Double-click `STK Minimap.pyw`** inside the folder - the window opens and
+4. **Double-click `STK Viewer.pyw`** inside the folder - the window opens and
    finds your tracks by itself, with no console window behind it. (The `.pyw`
    trick is Windows-only - the extension has no effect on Linux or macOS.)
 
@@ -64,11 +64,11 @@ python3 install.py
 ```
 
 Interactive: checks Pillow, NumPy and tkinter, offers to `pip install --user`
-whichever are missing, and offers to add **STK Minimap** to your applications
+whichever are missing, and offers to add **STK Viewer** to your applications
 list / dock. That last part matters on modern GNOME - Files removed the
 ability to run executable text files, so double-clicking a `.py` there just
 opens a text editor, and there's no setting to change that back. Undo the
-launcher entry with `rm ~/.local/share/applications/stk-minimap.desktop`.
+launcher entry with `rm ~/.local/share/applications/stk-viewer.desktop`.
 
 Prefer to do it by hand, or skip the prompts:
 
@@ -77,11 +77,11 @@ sudo pacman -S python-pillow python-numpy tk      # Arch / Manjaro
 sudo apt install python3-pil python3-numpy python3-tk python3-pil.imagetk   # Debian / Ubuntu
 sudo dnf install python3-pillow python3-numpy python3-tkinter               # Fedora
 
-python3 -m stk_minimap --gui              # from inside the repo folder
-python3 -m stk_minimap --install-desktop  # ditto - the launcher above does this for you
+python3 -m stk_viewer --gui              # from inside the repo folder
+python3 -m stk_viewer --install-desktop  # ditto - the launcher above does this for you
 ```
 
-`-m stk_minimap` only resolves from inside the repo folder (there's nothing
+`-m stk_viewer` only resolves from inside the repo folder (there's nothing
 installed onto `PYTHONPATH`), which is what `install.py`'s desktop entry
 already accounts for - it's fine to launch that one from anywhere.
 
@@ -89,7 +89,7 @@ already accounts for - it's fine to launch that one from anywhere.
 
 ```bash
 pip3 install pillow numpy
-python3 -m stk_minimap --gui
+python3 -m stk_viewer --gui
 ```
 
 `tk` / `python3-tk` is only needed for the GUI; the command line works without
@@ -99,10 +99,10 @@ it.
 
 ## The window
 
-`--gui`, or just double-click `STK Minimap.pyw` on Windows.
+`--gui`, or just double-click `STK Viewer.pyw` on Windows.
 
 <p align="center">
-  <img src="docs/gui.png" width="720" alt="The STK Minimap window">
+  <img src="docs/gui.png" width="720" alt="The STK Viewer window">
 </p>
 
 Pick a track from the list on the left and the preview updates immediately.
@@ -112,8 +112,8 @@ rather than `abyss`, and search either form. Cutscenes and grand-prix screens
 are left out: they carry no graph, so there's nothing to draw.
 
 Those three settings are remembered between runs, in
-`%APPDATA%\stk-minimap\settings.json` on Windows or
-`~/.config/stk-minimap/settings.json` elsewhere. Delete that file to start
+`%APPDATA%\stk-viewer\settings.json` on Windows or
+`~/.config/stk-viewer/settings.json` elsewhere. Delete that file to start
 fresh; nothing else is stored, and the tool works fine if it can't be written.
 
 Set the style, output size and quality, tick what you want drawn, then
@@ -333,20 +333,20 @@ wire protocol.
 ## Command line
 
 ```bash
-python3 -m stk_minimap hacienda                        # -> hacienda_minimap.png
-python3 -m stk_minimap hacienda --style clean --title  # readable, with the track name
-python3 -m stk_minimap battleisland -s 1024            # 1024x1024
-python3 -m stk_minimap --list                          # what can I render?
-python3 -m stk_minimap --all -O ./minimaps --style clean    # everything, into a folder
-python3 -m stk_minimap ~/Downloads/mytrack.zip --style clean    # an addon archive
-python3 -m stk_minimap /path/to/some/track_folder      # an unpacked track
+python3 -m stk_viewer hacienda                        # -> hacienda_minimap.png
+python3 -m stk_viewer hacienda --style clean --title  # readable, with the track name
+python3 -m stk_viewer battleisland -s 1024            # 1024x1024
+python3 -m stk_viewer --list                          # what can I render?
+python3 -m stk_viewer --all -O ./minimaps --style clean    # everything, into a folder
+python3 -m stk_viewer ~/Downloads/mytrack.zip --style clean    # an addon archive
+python3 -m stk_viewer /path/to/some/track_folder      # an unpacked track
 
-python3 -m stk_minimap --replay run.replay                    # route over its map;
+python3 -m stk_viewer --replay run.replay                    # route over its map;
                                                           # the track name is
                                                           # read from the file
-python3 -m stk_minimap --replay mine.replay --compare wr.replay --checklines
-python3 -m stk_minimap --replay run.replay --splits            # sector splits, printed
-python3 -m stk_minimap --replay run.replay --csv laps.csv --splits-csv splits.csv
+python3 -m stk_viewer --replay mine.replay --compare wr.replay --checklines
+python3 -m stk_viewer --replay run.replay --splits            # sector splits, printed
+python3 -m stk_viewer --replay run.replay --csv laps.csv --splits-csv splits.csv
 ```
 
 `--list` on a stock SuperTuxKart 1.5 install finds 44 tracks; 38 of them have a
@@ -466,7 +466,7 @@ py = height - (world_z - origin_z) * scaling      # PNG rows count from the top
 The script prints those three numbers for you:
 
 ```
-$ python3 -m stk_minimap hacienda
+$ python3 -m stk_viewer hacienda
 Hacienda  [hacienda]  driveline
   quads      : 109 (109 visible)
   bbox       : x -5.11..302.39   y -20.99..9.01   z -140.00..178.27
@@ -495,7 +495,7 @@ Windows
 - `%APPDATA%\supertuxkart\addons\tracks` - tracks you downloaded in-game
 - Steam libraries, found by reading `steamapps\libraryfolders.vdf`
 - portable zips extracted to Desktop, Downloads, Documents, Games, `C:\`, `D:\`
-- a `data\tracks` folder next to the `stk_minimap` folder, so you can drop this whole repo into the game folder
+- a `data\tracks` folder next to the `stk_viewer` folder, so you can drop this whole repo into the game folder
 
 Linux
 - `/usr/share/supertuxkart/data/tracks` and the usual `/usr/local`, `/opt`,
@@ -519,8 +519,8 @@ different install with `--data-dir` picks up that install's records too.
 If none of that matches your setup, set `STK_TRACK_DIR` or pass `--data-dir`:
 
 ```bash
-STK_TRACK_DIR="/somewhere/else/tracks" python3 -m stk_minimap --list
-python3 -m stk_minimap --data-dir "/somewhere/else/tracks" --list
+STK_TRACK_DIR="/somewhere/else/tracks" python3 -m stk_viewer --list
+python3 -m stk_viewer --data-dir "/somewhere/else/tracks" --list
 ```
 
 ---

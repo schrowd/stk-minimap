@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Drives the real stk_minimap App (real Tk widgets, real event loop) against a
+Drives the real stk_viewer App (real Tk widgets, real event loop) against a
 fake STK sync server, and checks the App's actual state - not a mock of it.
 
 Every call below is either the exact function Tk would invoke for that user
@@ -19,7 +19,7 @@ import sys
 import time
 
 import _paths
-from stk_minimap.replay.parser import load_replay
+from stk_viewer.replay.parser import load_replay
 
 PORT = 27995
 

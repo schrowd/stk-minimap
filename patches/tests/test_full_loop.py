@@ -15,7 +15,7 @@ import sys
 import time
 
 import _paths
-from stk_minimap.game.discovery import default_patched_stk_binary
+from stk_viewer.game.discovery import default_patched_stk_binary
 
 
 def main():

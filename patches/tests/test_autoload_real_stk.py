@@ -19,7 +19,7 @@ import subprocess
 import sys
 
 import _paths
-from stk_minimap.game.discovery import default_patched_stk_binary
+from stk_viewer.game.discovery import default_patched_stk_binary
 
 PORT = 27993
 
@@ -41,7 +41,7 @@ def main():
         orig_post(kind, payload)
     app.sync_post = spy_post
 
-    log_path = _paths.scratch_dir("stk-minimap-autoload-") / "stk_autoload.log"
+    log_path = _paths.scratch_dir("stk-viewer-autoload-") / "stk_autoload.log"
     log = open(log_path, "w")
     stk = subprocess.Popen(
         # -N is required: startBenchmark() is only reached when

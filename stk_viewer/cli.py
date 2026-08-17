@@ -1,16 +1,16 @@
 """
-stk_minimap - render a SuperTuxKart minimap to a PNG.
+stk_viewer - render a SuperTuxKart minimap to a PNG.
 
 Requires: Pillow.  numpy is used if present (nicer alpha-correct downscaling).
 
 Examples
 --------
-    python3 -m stk_minimap hacienda            # look the track up in the STK data dirs
-    python3 -m stk_minimap ~/tracks/mytrack -o map.png
-    python3 -m stk_minimap cornfield_crossing --style clean --size 1024
-    python3 -m stk_minimap battleisland --style clean --fit
-    python3 -m stk_minimap --list
-    python3 -m stk_minimap --all -O ./minimaps --style clean
+    python3 -m stk_viewer hacienda            # look the track up in the STK data dirs
+    python3 -m stk_viewer ~/tracks/mytrack -o map.png
+    python3 -m stk_viewer cornfield_crossing --style clean --size 1024
+    python3 -m stk_viewer battleisland --style clean --fit
+    python3 -m stk_viewer --list
+    python3 -m stk_viewer --all -O ./minimaps --style clean
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ from .tracks.scene import load_checklines
 
 def _launch_gui(extra_dirs: list[str]) -> int:
     """
-    Deferred import, so `python -m stk_minimap --list` never has to touch
+    Deferred import, so `python -m stk_viewer --list` never has to touch
     tkinter - the command line works without it.
     """
     try:
@@ -62,7 +62,7 @@ def install_desktop_entry(quiet: bool = False) -> int:
     """
     if os.name == "nt" or sys.platform == "darwin":
         print("--install-desktop is for Linux/BSD desktops.  On Windows, "
-              "double-click 'STK Minimap.pyw'.", file=sys.stderr)
+              "double-click 'STK Viewer.pyw'.", file=sys.stderr)
         return 1
 
     def dq(s: str) -> str:
@@ -74,18 +74,18 @@ def install_desktop_entry(quiet: bool = False) -> int:
     data = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
     apps = os.path.join(data, "applications")
     os.makedirs(apps, exist_ok=True)
-    path = os.path.join(apps, "stk-minimap.desktop")
+    path = os.path.join(apps, "stk-viewer.desktop")
 
-    # the repo root: this file lives at <root>/stk_minimap/cli.py
+    # the repo root: this file lives at <root>/stk_viewer/cli.py
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
     entry = (
         "[Desktop Entry]\n"
         "Type=Application\n"
-        f"Name=STK Minimap\n"
+        f"Name=STK Viewer\n"
         "GenericName=Minimap renderer\n"
         "Comment=Render SuperTuxKart track minimaps to PNG\n"
-        f"Exec={dq(sys.executable)} -m stk_minimap --gui\n"
+        f"Exec={dq(sys.executable)} -m stk_viewer --gui\n"
         f"Path={dq(repo_root)}\n"
         "Icon=applications-graphics\n"
         "Terminal=false\n"
@@ -104,7 +104,7 @@ def install_desktop_entry(quiet: bool = False) -> int:
 
     if not quiet:
         print(f"Installed {path}\n"
-              f"  'STK Minimap' should now appear in your applications list - "
+              f"  'STK Viewer' should now appear in your applications list - "
               f"you may need to log out\n  and back in if it doesn't show up "
               f"straight away.\n"
               f"  Remove it again with:  rm {path!r}")
@@ -127,7 +127,7 @@ def main(argv=None) -> int:
                     help="open the point-and-click window (default when the script "
                          "is started with no arguments on Windows)")
     ap.add_argument("--install-desktop", action="store_true",
-                    help="Linux: add 'STK Minimap' to the application menu, so you "
+                    help="Linux: add 'STK Viewer' to the application menu, so you "
                          "can launch the window without a terminal")
     ap.add_argument("--data-dir", action="append", default=[],
                     help="extra directory to search for tracks (repeatable)")
@@ -190,7 +190,7 @@ def main(argv=None) -> int:
                     help="write --replay's sector splits to a CSV file")
     ap.add_argument("-q", "--quiet", action="store_true")
     ap.add_argument("--version", action="version",
-                    version=f"stk_minimap {__version__}")
+                    version=f"stk_viewer {__version__}")
 
     args = ap.parse_args(argv)
     tmpdirs: list[str] = []

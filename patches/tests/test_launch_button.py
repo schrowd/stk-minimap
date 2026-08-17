@@ -7,12 +7,12 @@ import sys
 import time
 
 import _paths
-from stk_minimap.gui.settings import load_settings, save_settings
+from stk_viewer.gui.settings import load_settings, save_settings
 
 
 def main():
     c = _paths.Checker()
-    root_dir = _paths.scratch_dir("stk-minimap-fake-stk-")
+    root_dir = _paths.scratch_dir("stk-viewer-fake-stk-")
     fake_bin = _paths.make_fake_stk_binary(root_dir)
     probe = root_dir / "launch_probe.txt"
 

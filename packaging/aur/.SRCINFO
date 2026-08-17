@@ -1,0 +1,15 @@
+pkgbase = stk-viewer
+	pkgdesc = Render SuperTuxKart track minimaps to PNG and play replays back over them
+	pkgver = 1.6.0
+	pkgrel = 1
+	url = https://github.com/schrowd/stk-viewer
+	arch = any
+	license = GPL-3.0-only
+	depends = python
+	depends = python-pillow
+	depends = tk
+	optdepends = python-numpy: alpha-correct, sharper downscaling
+	source = stk-viewer-1.6.0.tar.gz::https://github.com/schrowd/stk-viewer/archive/refs/tags/v1.6.0.tar.gz
+	sha256sums = SKIP
+
+pkgname = stk-viewer

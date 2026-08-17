@@ -18,7 +18,7 @@ def settings_path() -> str:
         base = os.path.expanduser("~/Library/Application Support")
     else:
         base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
-    return os.path.join(base, "stk-minimap", "settings.json")
+    return os.path.join(base, "stk-viewer", "settings.json")
 
 
 def load_settings() -> dict:

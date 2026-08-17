@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-The scenario: stk-minimap has nothing loaded and is already connected, then a
+The scenario: stk-viewer has nothing loaded and is already connected, then a
 replay is loaded in-game.  The map should pick it up and follow it by itself.
 
 Also covers switching to a *different* replay mid-session, a replay the user
@@ -15,7 +15,7 @@ import sys
 import time
 
 import _paths
-from stk_minimap.replay.parser import load_replay
+from stk_viewer.replay.parser import load_replay
 
 PORT = 27994
 
@@ -51,7 +51,7 @@ def main():
     print("\n1. connected with nothing loaded on either side")
     app.sync_toggle()
     c.check(_paths.wait_for(app, lambda: app.sync_connected), "connected")
-    c.check(app.replay is None, "stk-minimap has no replay loaded")
+    c.check(app.replay is None, "stk-viewer has no replay loaded")
 
     print("\n2. a replay is loaded in-game -> the map follows by itself")
     fake.stdin.write(f"LOAD {a} {dur_a}\n")
