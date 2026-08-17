@@ -1,6 +1,6 @@
 # Maintainer: schrowd
 pkgname=stk-viewer
-pkgver=1.6.0
+pkgver=1.6.1
 pkgrel=1
 pkgdesc="Render SuperTuxKart track minimaps to PNG and play replays back over them"
 arch=('any')

@@ -72,9 +72,17 @@ check. Full breakdown:
 
 ### `0003-fix-replay-trailing-blank-line-crash.patch`
 
+> **Fixed upstream; this patch is only useful against 1.5.** stk-code commit
+> [`036f8582`](https://github.com/supertuxkart/stk-code/commit/036f8582087c17d00794a89174b8269bf3ee6f83)
+> (2025-10-24) closed
+> [issue #5539](https://github.com/supertuxkart/stk-code/issues/5539) by
+> guarding the read loop *and* repairing the shipped replay file. It landed
+> four days after 1.5 was tagged, so the 1.5 release still ships the crash
+> and this patch still fixes it there - but it no longer applies to master,
+> and there is nothing left to upstream.
+
 **A stock SuperTuxKart 1.5 crash, nothing to do with the rest of this.**
-Independent of `0001` and `0002`, applies on its own, and is the most
-straightforwardly upstreamable patch here.
+Independent of `0001` and `0002`, applies on its own.
 
 Watching `wr_candela_city_202598_1_82_3725.replay` - a **world record replay
 shipped with the game** - takes the whole game down:

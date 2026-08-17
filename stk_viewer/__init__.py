@@ -12,4 +12,4 @@ See docs/NOTES.md for the research behind the reimplementation, and
 docs/SYNCNOTES.md for the SuperTuxKart-sync half in stk_viewer.sync/.
 """
 
-__version__ = "1.6.0"
+__version__ = "1.6.1"

@@ -100,6 +100,19 @@ all.)
 
 ## 0003 - fix replay trailing blank line crash
 
+> **Fixed upstream; kept here because it still applies to the 1.5 release.**
+> stk-code commit
+> [`036f8582`](https://github.com/supertuxkart/stk-code/commit/036f8582087c17d00794a89174b8269bf3ee6f83)
+> (2025-10-24) closed
+> [issue #5539](https://github.com/supertuxkart/stk-code/issues/5539). Their
+> fix guards the read loop with a `kart_counter > num_kart` check that logs a
+> warning, and additionally repairs the shipped `.replay` file by removing the
+> trailing blank lines - the root cause being, per the issue, a player name
+> edit that accidentally added them. It landed **four days after 1.5 was
+> tagged**, so the 1.5 release still ships the crash and everything below
+> still holds there; against master the patch no longer applies, and there is
+> nothing left to upstream.
+
 `ReplayPlay::loadFile()` skips a computed number of header lines, then loops
 `fgets` -> `readKartData()` until EOF. `wr_candela_city_202598_1_82_3725.replay`
 ends with a **trailing blank line**, so the loop runs one extra iteration.
