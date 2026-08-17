@@ -9,7 +9,7 @@ license=('GPL-3.0-only')
 depends=('python' 'python-pillow' 'tk')
 optdepends=('python-numpy: alpha-correct, sharper downscaling')
 source=("$pkgname-$pkgver.tar.gz::https://github.com/schrowd/stk-viewer/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('b3c25b9d881c86a2df1530f8e41b83a41f94c9d0d66e07fafc294e86f60f0812')
+sha256sums=('6efb71a8793f6180764900b64bcc33b7d1b0d0fac98c1e99af1a6afb607fe5fa')
 
 # Not on PyPI and deliberately so (see README) - this installs the package
 # tree straight into /usr/share rather than building a wheel, and points a
