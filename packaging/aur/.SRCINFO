@@ -10,6 +10,6 @@ pkgbase = stk-viewer
 	depends = tk
 	optdepends = python-numpy: alpha-correct, sharper downscaling
 	source = stk-viewer-1.6.0.tar.gz::https://github.com/schrowd/stk-viewer/archive/refs/tags/v1.6.0.tar.gz
-	sha256sums = SKIP
+	sha256sums = b3c25b9d881c86a2df1530f8e41b83a41f94c9d0d66e07fafc294e86f60f0812
 
 pkgname = stk-viewer
