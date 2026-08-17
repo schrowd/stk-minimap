@@ -35,7 +35,10 @@ a run is actually losing time.
 ## Quick start
 
 You need **Python 3.9+** and **Pillow**. NumPy is optional but recommended (it
-makes the downscaling alpha-correct and a bit sharper).
+makes the downscaling alpha-correct and a bit sharper). There's nothing to
+install beyond that - `stk_minimap` is a plain Python package, run in place;
+clone or download this repo and run it with `python3 -m stk_minimap` from the
+repo root.
 
 ### Windows
 
@@ -45,11 +48,11 @@ makes the downscaling alpha-correct and a bit sharper).
    ```
    pip install pillow numpy
    ```
-3. Download `stk_minimap.py` (and `STK Minimap.pyw`, optional) from this repo.
-4. **Double-click `stk_minimap.py`** - the window opens and finds your tracks by
-   itself. Double-click `STK Minimap.pyw` instead if you'd rather not have a
-   console window behind it. (That `.pyw` trick is Windows-only - the extension
-   has no effect on Linux or macOS.)
+3. Download this repo (**Code → Download ZIP** on GitHub, or `git clone`) and
+   unzip it.
+4. **Double-click `STK Minimap.pyw`** inside the folder - the window opens and
+   finds your tracks by itself, with no console window behind it. (The `.pyw`
+   trick is Windows-only - the extension has no effect on Linux or macOS.)
 
 ### Linux
 
@@ -58,14 +61,13 @@ sudo pacman -S python-pillow python-numpy tk      # Arch / Manjaro
 sudo apt install python3-pil python3-numpy python3-tk python3-pil.imagetk   # Debian / Ubuntu
 sudo dnf install python3-pillow python3-numpy python3-tkinter               # Fedora
 
-chmod +x stk_minimap.py
-./stk_minimap.py --gui
+python3 -m stk_minimap --gui
 ```
 
 To get a clickable launcher instead of typing that every time:
 
 ```bash
-./stk_minimap.py --install-desktop
+python3 -m stk_minimap --install-desktop
 ```
 
 **STK Minimap** then appears in your applications list, searchable and
@@ -80,7 +82,7 @@ in a text editor and there's no setting to change that. Undo it by deleting
 
 ```bash
 pip3 install pillow numpy
-python3 stk_minimap.py --gui
+python3 -m stk_minimap --gui
 ```
 
 `tk` / `python3-tk` is only needed for the GUI; the command line works without
@@ -90,7 +92,7 @@ it.
 
 ## The window
 
-`--gui`, or just double-click the script on Windows.
+`--gui`, or just double-click `STK Minimap.pyw` on Windows.
 
 <p align="center">
   <img src="docs/gui.png" width="720" alt="The STK Minimap window">
@@ -247,7 +249,8 @@ the canvas to fit the whole recorded path when this happens, so the shortcut
 stays fully visible; you'll see the game-accurate map in its usual position
 with a bit of extra canvas around whichever side the shortcut went off. This
 only ever triggers when a replay's path genuinely leaves the frame; an
-ordinary run never changes the output at all.
+ordinary run never changes the output at all. Implementation and the math
+behind it: [docs/NOTES.md](docs/NOTES.md#when-a-replay-leaves-the-driveline-graphs-bounding-box).
 
 ### Sector splits
 
@@ -323,20 +326,20 @@ wire protocol.
 ## Command line
 
 ```bash
-./stk_minimap.py hacienda                        # -> hacienda_minimap.png
-./stk_minimap.py hacienda --style clean --title  # readable, with the track name
-./stk_minimap.py battleisland -s 1024            # 1024x1024
-./stk_minimap.py --list                          # what can I render?
-./stk_minimap.py --all -O ./minimaps --style clean    # everything, into a folder
-./stk_minimap.py ~/Downloads/mytrack.zip --style clean    # an addon archive
-./stk_minimap.py /path/to/some/track_folder      # an unpacked track
+python3 -m stk_minimap hacienda                        # -> hacienda_minimap.png
+python3 -m stk_minimap hacienda --style clean --title  # readable, with the track name
+python3 -m stk_minimap battleisland -s 1024            # 1024x1024
+python3 -m stk_minimap --list                          # what can I render?
+python3 -m stk_minimap --all -O ./minimaps --style clean    # everything, into a folder
+python3 -m stk_minimap ~/Downloads/mytrack.zip --style clean    # an addon archive
+python3 -m stk_minimap /path/to/some/track_folder      # an unpacked track
 
-./stk_minimap.py --replay run.replay                    # route over its map;
+python3 -m stk_minimap --replay run.replay                    # route over its map;
                                                           # the track name is
                                                           # read from the file
-./stk_minimap.py --replay mine.replay --compare wr.replay --checklines
-./stk_minimap.py --replay run.replay --splits            # sector splits, printed
-./stk_minimap.py --replay run.replay --csv laps.csv --splits-csv splits.csv
+python3 -m stk_minimap --replay mine.replay --compare wr.replay --checklines
+python3 -m stk_minimap --replay run.replay --splits            # sector splits, printed
+python3 -m stk_minimap --replay run.replay --csv laps.csv --splits-csv splits.csv
 ```
 
 `--list` on a stock SuperTuxKart 1.5 install finds 44 tracks; 38 of them have a
@@ -406,17 +409,14 @@ a contract and won't.
 The game's minimap is always oriented the same way, which isn't always the way
 you want it on a page. **Rotate** in the window turns the map in 15° steps, and
 `--rotate 90` does the same from the command line. Positive angles turn it
-clockwise; any angle works, not just multiples of 90.
-
-Everything rotates together - the track, the check lines and the replay
-overlay - because they all go through the same projection. The image is
-re-framed around the rotated track rather than rotated as a picture, so nothing
-is clipped and there's no resampling blur.
+clockwise; any angle works, not just multiples of 90. The track, the check
+lines and the replay overlay all rotate together.
 
 Rotating **breaks `mapPoint2MiniMap` compatibility**, in the same way `--fit`
-does: the pixel mapping is no longer the plain affine transform below, because
-the world point is turned about the track's centre first. Don't rotate a map
-you're going to draw kart positions on with the printed formula.
+does: the pixel mapping is no longer the plain affine transform below. Don't
+rotate a map you're going to draw kart positions on with the printed formula.
+Why it's a re-framing rather than an image rotation, and what that guarantees:
+[docs/NOTES.md](docs/NOTES.md#rotation).
 
 ---
 
@@ -439,10 +439,9 @@ have none at all. They're an annotation rather than part of the game's texture,
 so they're off by default and drawing them takes `--style exact` away from being
 a faithful copy of the in-game image.
 
-Note that lap lines are often very short - Hacienda's are two 2-unit segments at
-the edge of the start line, against gates that span 26 units - so at small sizes
-they can be a couple of pixels. That's the real geometry, not a rendering
-problem.
+Lap lines are often much shorter than the gates, so at small sizes they can
+render as just a couple of pixels - that's the real geometry, not a rendering
+problem. Numbers: [docs/NOTES.md](docs/NOTES.md#check-lines).
 
 ---
 
@@ -460,7 +459,7 @@ py = height - (world_z - origin_z) * scaling      # PNG rows count from the top
 The script prints those three numbers for you:
 
 ```
-$ ./stk_minimap.py hacienda
+$ python3 -m stk_minimap hacienda
 Hacienda  [hacienda]  driveline
   quads      : 109 (109 visible)
   bbox       : x -5.11..302.39   y -20.99..9.01   z -140.00..178.27
@@ -475,11 +474,10 @@ So a kart at world `(150, ?, 20)` on a 512px Hacienda minimap sits at
 Two things to know:
 
 - **Height (`y`) is ignored.** The minimap is a flat top-down projection.
-- **Non-square tracks get empty padding on one side.** The game's orthographic
-  box is square - `range = max(width, depth)` - and it's deliberately anchored
-  so that the mapping above stays a plain affine transform. That padding is
-  faithful, not a bug. `--fit` crops it away, and doing so **breaks the
-  mapping**, so don't use `--fit` for overlays.
+- **Non-square tracks get empty padding on one side** - faithful, not a bug;
+  why: [docs/NOTES.md](docs/NOTES.md#how-stk-actually-builds-a-minimap).
+  `--fit` crops it away, and doing so **breaks the mapping**, so don't use
+  `--fit` for overlays.
 
 ---
 
@@ -490,7 +488,7 @@ Windows
 - `%APPDATA%\supertuxkart\addons\tracks` - tracks you downloaded in-game
 - Steam libraries, found by reading `steamapps\libraryfolders.vdf`
 - portable zips extracted to Desktop, Downloads, Documents, Games, `C:\`, `D:\`
-- a `data\tracks` folder next to the script, so you can drop it into the game folder
+- a `data\tracks` folder next to the `stk_minimap` folder, so you can drop this whole repo into the game folder
 
 Linux
 - `/usr/share/supertuxkart/data/tracks` and the usual `/usr/local`, `/opt`,
@@ -514,8 +512,8 @@ different install with `--data-dir` picks up that install's records too.
 If none of that matches your setup, set `STK_TRACK_DIR` or pass `--data-dir`:
 
 ```bash
-STK_TRACK_DIR="/somewhere/else/tracks" ./stk_minimap.py --list
-./stk_minimap.py --data-dir "/somewhere/else/tracks" --list
+STK_TRACK_DIR="/somewhere/else/tracks" python3 -m stk_minimap --list
+python3 -m stk_minimap --data-dir "/somewhere/else/tracks" --list
 ```
 
 ---
@@ -524,39 +522,14 @@ STK_TRACK_DIR="/somewhere/else/tracks" ./stk_minimap.py --list
 
 This is a reimplementation of `Graph::makeMiniMap` and its callees from
 [stk-code](https://github.com/supertuxkart/stk-code) (`src/tracks/graph.cpp`,
-`drive_graph.cpp`, `arena_graph.cpp`, `quad.cpp`). Race tracks are read from
-`quads.xml` (the driveline graph), arenas and soccer fields from `navmesh.xml`.
-
-Behaviours that are reproduced on purpose, because getting any of them wrong
-shifts or distorts the image:
-
-- The bounding box includes **invisible** quads: the game grows it in
-  `createQuad`, before any visibility filtering.
-- The orthographic box is square and offset toward the shorter axis, anchoring
-  the track at the bounding-box minimum on both axes.
-- Overlapping quads **overwrite** rather than blend, because the game's material
-  is opaque.
-- The lap line is node 0's quad, shortened to 3% of the track's Z extent, drawn
-  in red - and only for race tracks, never arenas.
-- `p0="3:2"` in `quads.xml` means "point 2 of quad 3"; most quads share an edge
-  with their neighbour this way.
-- Navmesh faces aren't always four-sided. The game reads the first four indices
-  unconditionally, so this does too; `--full-polys` opts out.
-
-Rendering is supersampled and resolved with a premultiplied box filter, which
-keeps `exact` landing on alpha 127 exactly. (Lanczos rings past 127 and breaks
-that guarantee, so it's only used as a fallback when NumPy isn't installed.)
-
-If you want to change any of that, read [docs/NOTES.md](docs/NOTES.md) first; it
-records the research behind these decisions and the traps in reproducing them.
-
-### Known gaps
-
-- Soccer goal-line node colouring (`ArenaGraph::differentNodeColor`) isn't
-  implemented: it needs a Dijkstra pass over the navmesh.
-- CTF flag bounding-box expansion isn't implemented.
-- `height-testing` elements are parsed and ignored; they only affect physics.
-- Only the `default` `<mode>` from `track.xml` is honoured.
+`drive_graph.cpp`, `arena_graph.cpp`, `quad.cpp`) - not just visually similar,
+pixel-for-pixel where it claims to be (`--style exact`). The behaviours it
+reproduces on purpose and why each one matters, the rendering pipeline that
+keeps `exact` landing on alpha 127 exactly, and what still isn't implemented
+(soccer goal-line colouring, CTF flag bounding-box expansion, a couple of
+others) are all in
+[docs/NOTES.md](docs/NOTES.md#how-stk-actually-builds-a-minimap) - read that
+before changing any of it.
 
 ---
 

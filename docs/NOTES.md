@@ -1,6 +1,6 @@
 # Implementation notes
 
-Background research behind `stk_minimap.py`, kept because most of it can't be
+Background research behind the `stk_minimap` package, kept because most of it can't be
 reconstructed from the code alone. Worth reading before changing the graph loading,
 the framing, or the replay parsing: several of the behaviours below are
 counterintuitive, and getting one wrong silently shifts or distorts every image the

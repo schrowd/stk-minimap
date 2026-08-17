@@ -11,10 +11,11 @@
 # Safe to re-run: an existing checkout is reused rather than re-cloned, the
 # patches are only applied once, and the build itself is incremental.
 #
-# stk_minimap.py's GUI looks for the result at the same default location
-# this script uses (see default_patched_stk_binary() in stk_minimap.py), so
-# unless you pass --dir, building here is all that's needed for the "Launch
-# SuperTuxKart" button to find it on its own.
+# The stk_minimap GUI looks for the result at the same default location this
+# script uses (see default_patched_stk_binary() in
+# stk_minimap/game/discovery.py), so unless you pass --dir, building here is
+# all that's needed for the "Launch SuperTuxKart" button to find it on its
+# own.
 
 set -euo pipefail
 
@@ -188,5 +189,5 @@ info ""
 info "Run it with:"
 info "  cd '$DIR' && ./build/bin/supertuxkart --sync-port=27982"
 info ""
-info "stk_minimap.py's GUI will find this binary on its own (same default"
+info "The stk_minimap GUI will find this binary on its own (same default"
 info "location) - open the Replay tab and use the Launch SuperTuxKart button."
